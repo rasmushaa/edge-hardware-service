@@ -4,10 +4,10 @@ All settings must be provided through environment variables, via this module.
 """
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 
-HardwareBackend = Literal["mock", "rpi"] # The main flag that chooses which backend module to import and use
+HardwareBackend = Literal["simulation", "rpi"]
 
 
 @dataclass(frozen=True)
@@ -16,11 +16,14 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        backend = os.getenv("HARDWARE_BACKEND", "mock").lower()
+        backend = os.getenv(
+            "EDGE_HARDWARE_SERVICE_BACKEND",
+            "simulation",
+        ).lower()
 
-        if backend not in {"mock", "rpi"}:
+        if backend not in {"simulation", "rpi"}:
             raise ValueError(
-                f"Unsupported HARDWARE_BACKEND: {backend!r}"
+                f"Unsupported EDGE_HARDWARE_SERVICE_BACKEND: {backend!r}"
             )
 
-        return cls(hardware_backend=backend)
+        return cls(hardware_backend=cast(HardwareBackend, backend))
