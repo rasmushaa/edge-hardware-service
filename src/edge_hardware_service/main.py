@@ -42,8 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             except ModuleNotFoundError as error:
                 if error.name == "gpiozero" or (
-                    error.name is not None
-                    and error.name.startswith("gpiozero.")
+                    error.name is not None and error.name.startswith("gpiozero.")
                 ):
                     raise GpioProviderUnavailable(error.name) from error
                 raise
@@ -60,7 +59,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Edge Hardware Service",
-        version="0.1.0",
         lifespan=lifespan,
     )
     app.state.hardware_backend = settings.hardware_backend

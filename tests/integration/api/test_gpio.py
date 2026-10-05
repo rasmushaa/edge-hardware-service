@@ -1,5 +1,6 @@
 """HTTP integration tests for the simulation-backed GPIO API."""
 
+import builtins
 from collections.abc import Iterator
 
 import pytest
@@ -160,12 +161,8 @@ def test_openapi_exposes_all_gpio_operations_and_named_examples(
         ("put", "/api/v1/gpio/{pin}/pwm"),
     }
 
-    configuration = schema["paths"][
-        "/api/v1/gpio/{pin}/configuration"
-    ]["put"]
-    examples = configuration["requestBody"]["content"]["application/json"][
-        "examples"
-    ]
+    configuration = schema["paths"]["/api/v1/gpio/{pin}/configuration"]["put"]
+    examples = configuration["requestBody"]["content"]["application/json"]["examples"]
     assert set(examples) == {
         "input_without_pull",
         "input_with_pull_up",
@@ -179,6 +176,34 @@ def test_openapi_exposes_all_gpio_operations_and_named_examples(
 def test_health_endpoint_uses_the_versioned_prefix(client: TestClient) -> None:
     """The basic health route should start with the same API version prefix."""
     response = client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_simulation_startup_does_not_import_raspberry_pi_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulation lifespan must not load the optional GPIO Zero adapter."""
+    original_import = builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        """Fail if simulation startup attempts the Raspberry Pi import."""
+        if name == ("edge_hardware_service.hardware.gpio.gpiozero_factory"):
+            raise AssertionError("simulation imported the Raspberry Pi backend")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    app = create_app(Settings(hardware_backend="simulation"))
+    with TestClient(app) as simulation_client:
+        response = simulation_client.get("/api/v1/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

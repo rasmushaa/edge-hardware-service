@@ -50,6 +50,9 @@ class FakeFactory:
         self.created: list[tuple[str, int, object, FakeDevice]] = []
         self.next_close_error: Exception | None = None
         self.creation_error: Exception | None = None
+        self.close_error: Exception | None = None
+        self.close_calls = 0
+        self.open_devices_at_close: tuple[FakeDevice, ...] = ()
 
     def _device(
         self,
@@ -87,6 +90,15 @@ class FakeFactory:
         """Create a stopped PWM fake at the selected frequency."""
         frequency = 100.0 if frequency_hz is None else frequency_hz
         return self._device("pwm", pin, frequency_hz, 0.0, frequency)
+
+    def close(self) -> None:
+        """Record provider closure and the device state at that moment."""
+        self.close_calls += 1
+        self.open_devices_at_close = tuple(
+            item[3] for item in self.created if not item[3].closed
+        )
+        if self.close_error is not None:
+            raise self.close_error
 
 
 @pytest.fixture
@@ -208,7 +220,42 @@ def test_close_attempts_every_device_and_retains_failed_handles(
     assert "close failed" in str(raised.value.exceptions[0])
     assert failed_device.closed is False
     assert closed_device.closed is True
+    assert factory.close_calls == 1
+    assert factory.open_devices_at_close == (failed_device,)
     remaining = service.get_pin_status(17)
     assert isinstance(remaining, DigitalOutputPinSnapshot)
     with pytest.raises(PinNotOpen):
         service.get_pin_status(18)
+
+
+def test_close_releases_devices_before_factory_and_is_idempotent(
+    service: GpioService,
+    factory: FakeFactory,
+) -> None:
+    """Shutdown should close every device before closing its factory once."""
+    service.write(17, True)
+    service.write_pwm(18, 0.5)
+
+    service.close()
+    service.close()
+
+    assert factory.open_devices_at_close == ()
+    assert factory.close_calls == 1
+
+
+def test_close_reports_device_and_factory_failures_together(
+    factory: FakeFactory,
+) -> None:
+    """Shutdown should retain every independent cleanup failure."""
+    service = GpioService(factory)
+    factory.next_close_error = RuntimeError("device close failed")
+    factory.close_error = RuntimeError("factory close failed")
+    service.write(17, False)
+
+    with pytest.raises(ExceptionGroup) as raised:
+        service.close()
+
+    assert [str(error) for error in raised.value.exceptions] == [
+        "device close failed",
+        "factory close failed",
+    ]

@@ -195,10 +195,13 @@ class GpioDeviceFactory(Protocol):
         pin: int,
         frequency_hz: float | None,
     ) -> PwmOutputPinDevice: ...
+
+    def close(self) -> None: ...
 ```
 
 `GpioZeroDeviceFactory` maps public configuration to gpiozero constructor
-arguments and translates provider failures into application exceptions.
+arguments, owns one shared GPIO Zero provider, and translates provider failures
+into application exceptions.
 `SimulationDeviceFactory` stores deterministic, in-memory device state without
 adding a second HTTP API.
 
@@ -208,9 +211,15 @@ adding a second HTTP API.
 Imports must remain inside the selected branch so simulation mode never imports
 the gpiozero implementation.
 
+In Raspberry Pi mode, factory construction initializes GPIO Zero's normal
+provider selection before the application begins serving requests. The selected
+provider class and visible controller information are logged once. Startup
+fails if no provider is usable.
+
 The FastAPI lifespan creates one `GpioService` per process and closes it during
-shutdown. Production must use one Uvicorn worker because the registry and the
-physical hardware are process-local resources.
+shutdown. The service closes every device before closing the shared provider.
+Production must use one Uvicorn worker because the registry and the physical
+hardware are process-local resources.
 
 ## GPIO behavior
 
@@ -242,12 +251,13 @@ schema.
 
 Releasing a pin:
 
-1. Removes its handle from the service registry.
-2. Calls `close()` on the device.
+1. Calls `close()` on the device.
+2. Removes its handle from the service registry after successful cleanup.
 3. Makes the pin available for another mode.
 
-Application shutdown releases all registered pins. Cleanup is owned by the
-FastAPI lifespan, not `__del__` methods.
+Application shutdown attempts to release every registered pin, then closes the
+runtime factory exactly once. Cleanup is owned by the FastAPI lifespan, not
+`__del__` methods.
 
 ### Concurrency
 
@@ -261,10 +271,14 @@ application.
 ### Raspberry Pi
 
 - Imports gpiozero only after Raspberry Pi mode is selected.
+- Initializes and logs one provider before the application becomes ready.
+- Passes that provider explicitly to every input, digital-output, and PWM
+  device.
 - Uses gpiozero input, digital-output, and PWM-output devices.
 - Maps pull and PWM configuration explicitly.
 - Converts gpiozero failures into stable service exceptions before they reach
   the router.
+- Closes the provider after all device cleanup attempts during shutdown.
 
 ### Simulation
 
@@ -369,12 +383,14 @@ short bullet points. For example:
     summary="Read a digital input",
     operation_id="read_gpio_input",
     description="""
-Read the current logical value of a BCM GPIO pin.
+Read the current electrical level of a BCM GPIO pin.
 
 - An unopened pin is automatically configured as an input.
 - The default pull mode is `none` unless configured explicitly.
+- An unconnected input with pull mode `none` may return an unstable value.
 - Reading a pin already opened as an output returns `409 Conflict`.
-- The returned value is `true` for high and `false` for low.
+- The returned value is `true` for electrical HIGH and `false` for LOW,
+  regardless of pull direction.
 """,
     response_model=DigitalReadResponse,
 )
@@ -494,21 +510,35 @@ line or trivial Pydantic behavior.
 ### Bookworm container and Raspberry Pi validation
 
 Default development and CI runs must not require Raspberry Pi packages or
-hardware. The Debian Bookworm container is the authoritative environment for
-manual validation of OS-provided imports and physical GPIO behavior.
+hardware. A prepared Raspberry Pi OS Bookworm host is the authoritative
+environment for OS-library, provider, and GPIO device-access compatibility; the
+production container must later prove parity on the same Pi.
 
-Keep a short, repeatable manual smoke checklist for the container running on a
-real device:
+Keep the native functional suite short, explicit, and repeatable:
 
-- Open, write, and release a known safe digital output.
-- Read a known input.
-- Apply and stop PWM.
-- Confirm shutdown releases all pins.
+- Validate three distinct operator-selected BCM pins before opening hardware.
+- Verify an unconnected input using the Pi's internal pull-up and pull-down.
+- Toggle and reset a known safe digital output.
+- Apply two PWM duty cycles and stop PWM.
+- Reset outputs before closing devices, then close the shared provider.
 
-The checklist runs deliberately inside the prepared container on a configured
-Pi. It is not part of the normal uv-managed unit-test suite. The same container
-should also be exercised frequently in simulation mode to validate startup,
-Swagger, and ordinary client workflows without touching hardware.
+No external components or wiring are required; all selected pins must remain
+unconnected. The suite validates library and application behavior, not physical
+output voltages, PWM waveforms, or electrical timing. It is opt-in and is not
+part of the normal uv-managed test run.
+The production container should also be exercised frequently in simulation
+mode to validate startup, Swagger, and ordinary client workflows without
+touching hardware. Container access to physical GPIO is validated separately
+using the same unconnected pin selections.
+
+The GPIO container validation uses a dedicated ARM64 test target derived from
+the same OS-package layer as the runtime image. It reports apt-owned GPIO
+packages, compares the host and container provider class, then runs the native
+suite as root with `--privileged` and a read-only `/run/udev` mount. This
+matches the current production container and permits native GPIO notification
+pipes under the root-owned working directory. The broad device access is an
+explicit initial compatibility configuration; it is not a claim that every
+privileged device is required by GPIO.
 
 ## Delivery roadmap
 
@@ -545,12 +575,17 @@ Status: implemented.
 
 ### 4. Complete the gpiozero factory
 
-Status: implemented; physical-device validation on a Raspberry Pi remains
-pending.
+Status: implemented in code. Input semantics were corrected in `HW-01`, and
+provider lifecycle ownership was completed in `HW-02`. Native digital-output
+and PWM validation pass; native internal-pull input and container hardware
+validation remain open in
+[`hardware-validation-roadmap.md`](hardware-validation-roadmap.md).
 
 - Construct all three gpiozero device types.
 - Apply pull configuration and PWM frequency.
 - Normalize provider failures into service exceptions.
+- Initialize, report, share, and close one GPIO Zero provider per application
+  lifespan.
 - Keep gpiozero imports isolated to this module.
 - Validate imports and device creation inside the Bookworm container with
   OS-installed packages.
@@ -578,8 +613,8 @@ Status: implemented.
 
 ### 7. Add focused automated tests
 
-Status: implemented. Raspberry Pi hardware tests remain opt-in and require
-explicitly configured safe BCM pins.
+Status: implemented. Raspberry Pi hardware tests remain opt-in, require three
+unconnected pins, and validate all selected BCM pins before hardware access.
 
 - Add pytest through uv.
 - Implement the service, simulation, and API scenarios listed above.
@@ -587,6 +622,9 @@ explicitly configured safe BCM pins.
 - Confirm the default suite neither imports nor requires Raspberry Pi packages.
 
 ### 8. Finish runtime and contributor documentation
+
+Status: expanded into the focused hardware-validation and documentation
+roadmap in [`hardware-validation-roadmap.md`](hardware-validation-roadmap.md).
 
 - Document simulation and Raspberry Pi startup commands.
 - Document the single-worker requirement and BCM numbering.

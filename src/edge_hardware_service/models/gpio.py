@@ -49,7 +49,8 @@ class PinConfigurationRequest(_RequestModel):
         default=PullMode.NONE,
         description=(
             "Internal resistor configuration. This may differ from `none` only "
-            "when mode is `input`."
+            "when mode is `input`. A no-pull input needs an external pull or "
+            "driven signal for a stable value."
         ),
         examples=[PullMode.NONE, PullMode.UP, PullMode.DOWN],
     )
@@ -143,7 +144,7 @@ class PwmWriteRequest(_RequestModel):
 
 
 class DigitalReadResponse(_ResponseModel):
-    """Current logical value returned for an input pin."""
+    """Current electrical level returned for an input pin."""
 
     pin: int = Field(
         ge=0,
@@ -151,7 +152,10 @@ class DigitalReadResponse(_ResponseModel):
         examples=[17, 18, 22],
     )
     value: bool = Field(
-        description="Current logical value: `true` for high or `false` for low.",
+        description=(
+            "Current electrical level: `true` for HIGH or `false` for LOW. "
+            "Pull configuration does not invert this value."
+        ),
         examples=[True, False],
     )
 
@@ -178,7 +182,10 @@ class InputPinStatus(_ResponseModel):
         description="Active GPIO mode.",
     )
     value: bool = Field(
-        description="Current logical input value.",
+        description=(
+            "Current electrical input level: `true` for HIGH or `false` for "
+            "LOW. Pull configuration does not invert this value."
+        ),
         examples=[True, False],
     )
     pull: PullMode = Field(

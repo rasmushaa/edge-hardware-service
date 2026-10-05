@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from edge_hardware_service.hardware.gpio.exceptions import (
     GpioHardwareError,
+    GpioProviderError,
     GpioProviderUnavailable,
     PinAlreadyOpen,
     PinDeviceClosed,
@@ -15,7 +16,6 @@ from edge_hardware_service.hardware.gpio.exceptions import (
     PinNotOpen,
 )
 from edge_hardware_service.models.errors import ErrorResponse
-
 
 PIN_NOT_OPEN_RESPONSE: dict[str, Any] = {
     "model": ErrorResponse,
@@ -155,6 +155,25 @@ def register_exception_handlers(app: FastAPI) -> None:
                 code="hardware_unavailable",
                 message=str(error),
                 details={"provider": error.provider},
+            ),
+        )
+
+    @app.exception_handler(GpioProviderError)
+    async def gpio_provider_error_handler(
+        request: Request,
+        error: GpioProviderError,
+    ) -> JSONResponse:
+        """Translate a provider-wide lifecycle failure to a 503 response."""
+        del request
+        return _json_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            ErrorResponse(
+                code="hardware_unavailable",
+                message=str(error),
+                details={
+                    "provider": error.provider,
+                    "operation": error.operation,
+                },
             ),
         )
 

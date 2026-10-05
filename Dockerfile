@@ -18,7 +18,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY --from=uv /uv /uvx /usr/local/bin/
 
 # Raspberry Pi owns the native GPIO and camera stack. Keep ABI-coupled Python
-# packages in apt and expose them to the application virtual environment.
+# packages in apt and expose them to the application virtual environment. Both
+# the preferred lgpio driver and its RPi.GPIO-compatible fallback are explicit.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
@@ -42,6 +43,7 @@ RUN apt-get update \
         python3-libcamera \
         python3-numpy \
         python3-picamera2 \
+        python3-rpi-lgpio \
     && apt-get purge --yes --auto-remove curl gnupg \
     && rm -f /tmp/raspberrypi.gpg.key \
     && rm -rf /var/lib/apt/lists/*
@@ -52,7 +54,7 @@ RUN uv venv \
         --python /usr/bin/python3 \
         --system-site-packages \
     && .venv/bin/python -c \
-        "import gpiozero, libcamera, numpy, picamera2"
+        "import importlib.util; import gpiozero, lgpio, libcamera, numpy, picamera2; assert importlib.util.find_spec('RPi.GPIO') is not None"
 
 ENV PATH="/app/.venv/bin:$PATH" \
     EDGE_HARDWARE_SERVICE_BACKEND=simulation
@@ -67,6 +69,18 @@ COPY tests ./tests
 RUN uv sync --frozen
 
 CMD ["uv", "run", "pytest"]
+
+
+FROM container-smoke-test AS rpi-hardware-test
+
+ENV EDGE_HARDWARE_SERVICE_BACKEND=rpi
+
+RUN dpkg-query --show \
+        python3-gpiozero \
+        python3-lgpio \
+        python3-rpi-lgpio
+
+CMD ["python", "-m", "pytest", "-m", "rpi", "--verbose", "--showlocals", "-o", "cache_dir=/tmp/pytest-cache"]
 
 
 FROM system AS runtime

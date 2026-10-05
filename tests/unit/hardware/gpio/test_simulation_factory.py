@@ -28,7 +28,7 @@ def test_input_value_is_determined_by_pull_configuration(
     pull: PullMode,
     expected: bool,
 ) -> None:
-    """Simulation inputs should have deterministic documented values."""
+    """Simulation inputs should expose deterministic electrical levels."""
     device = SimulationDeviceFactory().create_input(17, pull)
 
     assert device.value is expected

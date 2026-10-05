@@ -2,10 +2,10 @@
 
 All settings must be provided through environment variables, via this module.
 """
+
 import os
 from dataclasses import dataclass
 from typing import Literal, cast
-
 
 HardwareBackend = Literal["simulation", "rpi"]
 
@@ -22,8 +22,6 @@ class Settings:
         ).lower()
 
         if backend not in {"simulation", "rpi"}:
-            raise ValueError(
-                f"Unsupported EDGE_HARDWARE_SERVICE_BACKEND: {backend!r}"
-            )
+            raise ValueError(f"Unsupported EDGE_HARDWARE_SERVICE_BACKEND: {backend!r}")
 
         return cls(hardware_backend=cast(HardwareBackend, backend))

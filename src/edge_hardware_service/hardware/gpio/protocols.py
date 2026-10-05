@@ -11,11 +11,11 @@ from edge_hardware_service.models.gpio import PullMode
 
 
 class InputPinDevice(Protocol):
-    """Readable GPIO input device."""
+    """Readable GPIO input whose value represents its electrical level."""
 
     @property
     def value(self) -> bool:
-        """Return the current logical input value."""
+        """Return `True` for electrical HIGH and `False` for LOW."""
         ...
 
     def close(self) -> None:
@@ -70,7 +70,7 @@ class PwmOutputPinDevice(Protocol):
 
 
 class GpioDeviceFactory(Protocol):
-    """Construct stateful GPIO devices for one runtime implementation."""
+    """Construct devices and own one runtime provider's lifecycle."""
 
     def create_input(
         self,
@@ -81,7 +81,8 @@ class GpioDeviceFactory(Protocol):
 
         Args:
             pin: BCM GPIO pin number.
-            pull: Pull-up or pull-down configuration.
+            pull: Internal resistor configuration. Pull direction must not
+                invert the returned electrical level.
 
         Returns:
             A newly opened input device.
@@ -116,4 +117,8 @@ class GpioDeviceFactory(Protocol):
         Returns:
             A newly opened PWM output device.
         """
+        ...
+
+    def close(self) -> None:
+        """Release provider-level resources after all devices are closed."""
         ...

@@ -3,7 +3,8 @@
 The simulation implementation mirrors the lifecycle of physical devices while
 remaining independent of gpiozero and Raspberry Pi system packages. State is
 kept in memory for the lifetime of the application process. Input values are
-deterministic and derived only from pull configuration.
+deterministic and derived only from pull configuration; `True` represents HIGH
+and `False` represents LOW.
 """
 
 from logging import getLogger
@@ -15,7 +16,6 @@ from edge_hardware_service.hardware.gpio.exceptions import (
     PinDeviceClosed,
 )
 from edge_hardware_service.models.gpio import PullMode
-
 
 logger = getLogger(__name__)
 
@@ -71,14 +71,14 @@ class SimulationInputDevice(_SimulationDevice):
 
         Args:
             pin: BCM GPIO pin number.
-            value: Initial logical input value.
+            value: Initial electrical level, where `True` is HIGH.
         """
         super().__init__(pin)
         self._value = value
 
     @property
     def value(self) -> bool:
-        """Return the current simulated input value.
+        """Return the current simulated electrical input level.
 
         Raises:
             PinDeviceClosed: If the device is closed.
@@ -233,9 +233,7 @@ class SimulationPwmOutputDevice(_SimulationDevice):
 
 
 SimulationDevice = (
-    SimulationInputDevice
-    | SimulationDigitalOutputDevice
-    | SimulationPwmOutputDevice
+    SimulationInputDevice | SimulationDigitalOutputDevice | SimulationPwmOutputDevice
 )
 
 DeviceT = TypeVar(
@@ -348,8 +346,13 @@ class SimulationDeviceFactory:
             pin,
             SimulationPwmOutputDevice(
                 pin,
-                frequency_hz=(
-                    100.0 if frequency_hz is None else frequency_hz
-                ),
+                frequency_hz=(100.0 if frequency_hz is None else frequency_hz),
             ),
         )
+
+    def close(self) -> None:
+        """Release provider-level resources.
+
+        The simulation factory owns no resource beyond the devices closed by
+        `GpioService`, so this operation is intentionally a no-op.
+        """

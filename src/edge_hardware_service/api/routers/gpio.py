@@ -31,7 +31,6 @@ from edge_hardware_service.services.gpio import (
     PwmOutputPinSnapshot,
 )
 
-
 router = APIRouter(prefix="/gpio", tags=["GPIO"])
 
 BcmPin = Annotated[
@@ -239,6 +238,7 @@ Explicitly configure or reconfigure a BCM GPIO pin.
 
 - Any device currently using the pin is closed before its replacement opens.
 - Input mode supports `none`, `up`, and `down` pull configurations.
+- A no-pull input needs an external pull or driven signal for a stable value.
 - PWM mode accepts an optional positive frequency; omission uses the provider
   default.
 - A successful response reports `explicit` as its configuration source.
@@ -269,12 +269,14 @@ def configure_gpio_pin(
     summary="Read a digital input",
     operation_id="read_gpio_input",
     description="""
-Read the current logical value of a BCM GPIO pin.
+Read the current electrical level of a BCM GPIO pin.
 
 - An unopened pin is automatically configured as an input.
 - Implicit input configuration uses pull mode `none`.
+- An unconnected input with pull mode `none` may return an unstable value.
 - Reading a pin already opened as an output or PWM returns `409 Conflict`.
-- The returned value is `true` for high and `false` for low.
+- The returned value is `true` for electrical HIGH and `false` for LOW,
+  regardless of pull direction.
 """,
     response_model=DigitalReadResponse,
     responses=COMMON_OPERATION_ERRORS,
@@ -290,7 +292,7 @@ def read_gpio(
         service: Process-scoped GPIO service.
 
     Returns:
-        Current logical input value.
+        Current electrical input level.
     """
     return DigitalReadResponse(pin=pin, value=service.read(pin))
 

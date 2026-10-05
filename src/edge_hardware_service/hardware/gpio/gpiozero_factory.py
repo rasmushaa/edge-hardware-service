@@ -3,20 +3,98 @@
 This module is imported only when Raspberry Pi mode is selected. Its gpiozero
 dependency is installed by the Debian Bookworm container rather than managed by
 the portable Python project. Provider exceptions are translated here so no
-gpiozero-specific exception crosses into the service or API layers.
+gpiozero-specific exception crosses into the service or API layers. Input
+adapters expose the electrical pin level rather than gpiozero's configurable
+active/inactive interpretation.
 """
 
 from collections.abc import Callable
+from glob import glob
+from logging import getLogger
 from typing import TypeVar
 
-from gpiozero import DigitalOutputDevice, InputDevice, PWMOutputDevice
+from gpiozero import Device, DigitalOutputDevice, InputDevice, PWMOutputDevice
 from gpiozero.exc import GPIOZeroError
+from gpiozero.pins import Factory
 
-from edge_hardware_service.hardware.gpio.exceptions import GpioHardwareError
+from edge_hardware_service.hardware.gpio.exceptions import (
+    GpioHardwareError,
+    GpioProviderError,
+    GpioProviderUnavailable,
+)
 from edge_hardware_service.models.gpio import PullMode
 
-
 ResultT = TypeVar("ResultT")
+logger = getLogger(__name__)
+
+try:
+    from lgpio import error as LgpioError
+except ModuleNotFoundError:
+    PROVIDER_EXCEPTIONS = (GPIOZeroError, OSError, RuntimeError)
+else:
+    PROVIDER_EXCEPTIONS = (
+        GPIOZeroError,
+        LgpioError,
+        OSError,
+        RuntimeError,
+    )
+
+
+def _provider_name(pin_factory: Factory) -> str:
+    """Return the fully qualified class name of a GPIO Zero pin factory.
+
+    Args:
+        pin_factory: Initialized GPIO Zero provider.
+
+    Returns:
+        Stable diagnostic name containing the module and qualified class.
+    """
+    provider_type = type(pin_factory)
+    return f"{provider_type.__module__}.{provider_type.__qualname__}"
+
+
+def _initialize_default_pin_factory() -> Factory:
+    """Initialize and return GPIO Zero's normally selected pin factory.
+
+    Returns:
+        Initialized GPIO Zero provider selected by the OS environment.
+
+    Raises:
+        GpioProviderUnavailable: If GPIO Zero cannot select a usable provider.
+    """
+    try:
+        Device.ensure_pin_factory()
+    except PROVIDER_EXCEPTIONS as error:
+        raise GpioProviderUnavailable("gpiozero pin factory") from error
+
+    pin_factory = Device.pin_factory
+    if pin_factory is None:
+        raise GpioProviderUnavailable("gpiozero pin factory")
+    return pin_factory
+
+
+def _provider_lifecycle_call(
+    provider: str,
+    operation: str,
+    callback: Callable[[], ResultT],
+) -> ResultT:
+    """Run a provider-wide lifecycle operation with domain error translation.
+
+    Args:
+        provider: Fully qualified provider class name.
+        operation: Short description of the lifecycle operation.
+        callback: Deferred provider operation.
+
+    Returns:
+        Value returned by the provider operation.
+
+    Raises:
+        GpioProviderError: If the lower-level provider operation fails.
+    """
+    try:
+        return callback()
+    except PROVIDER_EXCEPTIONS as error:
+        raise GpioProviderError(provider, operation) from error
 
 
 def _provider_call(
@@ -39,7 +117,7 @@ def _provider_call(
     """
     try:
         return callback()
-    except (GPIOZeroError, OSError) as error:
+    except PROVIDER_EXCEPTIONS as error:
         raise GpioHardwareError(pin, operation) from error
 
 
@@ -58,7 +136,11 @@ class _GpioZeroInputDevice:
 
     @property
     def value(self) -> bool:
-        """Return the current logical input value.
+        """Return the current electrical input level.
+
+        The public API defines `True` as electrical HIGH. Reading the
+        underlying pin state avoids gpiozero's active-state inversion for an
+        input configured with a pull-up resistor.
 
         Raises:
             GpioHardwareError: If the provider cannot read the pin.
@@ -67,7 +149,7 @@ class _GpioZeroInputDevice:
             _provider_call(
                 self._pin,
                 "read input",
-                lambda: self._device.value,
+                lambda: self._device.pin.state,
             )
         )
 
@@ -222,7 +304,59 @@ class _GpioZeroPwmOutputDevice:
 
 
 class GpioZeroDeviceFactory:
-    """Create protocol-compatible GPIO devices through gpiozero."""
+    """Own one GPIO Zero provider and create protocol-compatible devices."""
+
+    def __init__(self, pin_factory: Factory | None = None) -> None:
+        """Initialize and report the process-scoped GPIO Zero provider.
+
+        Args:
+            pin_factory: Optional initialized provider for dependency injection.
+                GPIO Zero performs its normal OS-level selection when omitted.
+
+        Raises:
+            GpioProviderUnavailable: If no GPIO Zero provider can initialize.
+        """
+        self._pin_factory = (
+            _initialize_default_pin_factory() if pin_factory is None else pin_factory
+        )
+        self._provider_name = _provider_name(self._pin_factory)
+        self._controller = getattr(self._pin_factory, "chip", None)
+        self._available_gpiochips = tuple(sorted(glob("/dev/gpiochip*")))
+        self._closed = False
+
+        logger.info(
+            "Initialized GPIO Zero provider %s (controller=%s, available_gpiochips=%s)",
+            self._provider_name,
+            (self._controller if self._controller is not None else "provider-managed"),
+            ",".join(self._available_gpiochips) or "none",
+        )
+
+    @property
+    def provider_name(self) -> str:
+        """Return the fully qualified selected provider class name."""
+        return self._provider_name
+
+    @property
+    def controller(self) -> object | None:
+        """Return the provider-reported GPIO controller, when available."""
+        return self._controller
+
+    @property
+    def available_gpiochips(self) -> tuple[str, ...]:
+        """Return GPIO character devices visible during initialization."""
+        return self._available_gpiochips
+
+    def _ensure_open(self) -> None:
+        """Reject device creation after the shared provider is closed.
+
+        Raises:
+            GpioProviderError: If the provider has already been closed.
+        """
+        if self._closed:
+            raise GpioProviderError(
+                self._provider_name,
+                "create device after close",
+            )
 
     def create_input(
         self,
@@ -233,7 +367,8 @@ class GpioZeroDeviceFactory:
 
         Args:
             pin: BCM GPIO pin number.
-            pull: Pull-up or pull-down configuration.
+            pull: Internal resistor configuration. This does not change the
+                polarity of the returned electrical level.
 
         Returns:
             A newly opened input device adapter.
@@ -241,15 +376,27 @@ class GpioZeroDeviceFactory:
         Raises:
             GpioHardwareError: If the provider cannot open the pin.
         """
+        self._ensure_open()
         pull_up = {
             PullMode.NONE: None,
             PullMode.UP: True,
             PullMode.DOWN: False,
         }[pull]
+        input_options: dict[str, bool | None] = {"pull_up": pull_up}
+        if pull == PullMode.NONE:
+            # GPIO Zero cannot infer active polarity for a floating input.
+            # HIGH is active so construction succeeds without changing the
+            # API's electrical HIGH/LOW semantics.
+            input_options["active_state"] = True
+
         device = _provider_call(
             pin,
             "open input",
-            lambda: InputDevice(pin, pull_up=pull_up),
+            lambda: InputDevice(
+                pin,
+                pin_factory=self._pin_factory,
+                **input_options,
+            ),
         )
         return _GpioZeroInputDevice(pin, device)
 
@@ -268,10 +415,14 @@ class GpioZeroDeviceFactory:
         Raises:
             GpioHardwareError: If the provider cannot open the pin.
         """
+        self._ensure_open()
         device = _provider_call(
             pin,
             "open digital output",
-            lambda: DigitalOutputDevice(pin),
+            lambda: DigitalOutputDevice(
+                pin,
+                pin_factory=self._pin_factory,
+            ),
         )
         return _GpioZeroDigitalOutputDevice(pin, device)
 
@@ -292,6 +443,7 @@ class GpioZeroDeviceFactory:
         Raises:
             GpioHardwareError: If the provider cannot open the pin.
         """
+        self._ensure_open()
         kwargs = {}
         if frequency_hz is not None:
             kwargs["frequency"] = frequency_hz
@@ -299,6 +451,34 @@ class GpioZeroDeviceFactory:
         device = _provider_call(
             pin,
             "open PWM output",
-            lambda: PWMOutputDevice(pin, **kwargs),
+            lambda: PWMOutputDevice(
+                pin,
+                pin_factory=self._pin_factory,
+                **kwargs,
+            ),
         )
         return _GpioZeroPwmOutputDevice(pin, device)
+
+    def close(self) -> None:
+        """Close the shared GPIO Zero provider exactly once.
+
+        Device adapters must be closed before this method is called.
+
+        Raises:
+            GpioProviderError: If the provider cannot release its resources.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        try:
+            _provider_lifecycle_call(
+                self._provider_name,
+                "close",
+                self._pin_factory.close,
+            )
+        finally:
+            if Device.pin_factory is self._pin_factory:
+                Device.pin_factory = None
+
+        logger.info("Closed GPIO Zero provider %s", self._provider_name)

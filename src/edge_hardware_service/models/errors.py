@@ -4,7 +4,6 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-
 ErrorCode: TypeAlias = Literal[
     "pin_not_open",
     "pin_mode_conflict",
@@ -64,9 +63,7 @@ class ErrorResponse(BaseModel):
                         "errors": [
                             {
                                 "field": "body.duty_cycle",
-                                "message": (
-                                    "Input should be less than or equal to 1"
-                                ),
+                                "message": ("Input should be less than or equal to 1"),
                                 "type": "less_than_equal",
                             }
                         ]

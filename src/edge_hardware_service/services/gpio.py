@@ -102,9 +102,10 @@ class GpioService:
         self._pins: dict[int, PinHandle] = {}
         self._pin_factory = pin_factory
         self._lock = RLock()
+        self._closed = False
 
     def read(self, pin: int) -> bool:
-        """Read a digital input value.
+        """Read a digital input's electrical level.
 
         An unopened pin is implicitly configured as an input without a pull
         resistor.
@@ -113,7 +114,7 @@ class GpioService:
             pin: BCM GPIO pin number.
 
         Returns:
-            Current logical input value.
+            `True` for electrical HIGH or `False` for LOW.
 
         Raises:
             PinModeConflict: If the pin is open in another mode.
@@ -273,9 +274,7 @@ class GpioService:
             Immutable tuple of pin snapshots.
         """
         with self._lock:
-            return tuple(
-                self._snapshot(self._pins[pin]) for pin in sorted(self._pins)
-            )
+            return tuple(self._snapshot(self._pins[pin]) for pin in sorted(self._pins))
 
     def release(self, pin: int) -> bool:
         """Release one GPIO pin.
@@ -300,10 +299,12 @@ class GpioService:
             return True
 
     def close(self) -> None:
-        """Release every registered GPIO pin.
+        """Release every pin and then close the runtime factory.
 
         All devices receive a close attempt even when another device fails to
-        close. Successfully closed handles are removed from the registry.
+        close. Successfully closed handles are removed from the registry. The
+        factory receives exactly one close attempt after all device attempts.
+        Repeated calls are safe no-ops.
 
         Raises:
             ExceptionGroup: If one or more devices fail to close.
@@ -311,14 +312,23 @@ class GpioService:
         failures: list[Exception] = []
 
         with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+
             for pin in tuple(self._pins):
                 try:
                     self.release(pin)
                 except Exception as error:
                     failures.append(error)
 
+            try:
+                self._pin_factory.close()
+            except Exception as error:
+                failures.append(error)
+
         if failures:
-            raise ExceptionGroup("Failed to close GPIO devices", failures)
+            raise ExceptionGroup("Failed to close GPIO service", failures)
 
     def _create_handle(
         self,

@@ -29,8 +29,7 @@ class PinModeConflict(Exception):
         self.mode = mode
         self.requested_mode = requested_mode
         super().__init__(
-            f"GPIO pin {pin} is open as {mode.value}, not "
-            f"{requested_mode.value}"
+            f"GPIO pin {pin} is open as {mode.value}, not {requested_mode.value}"
         )
 
 
@@ -102,13 +101,11 @@ class GpioHardwareError(RuntimeError):
         """
         self.pin = pin
         self.operation = operation
-        super().__init__(
-            f"GPIO hardware operation {operation!r} failed for pin {pin}"
-        )
+        super().__init__(f"GPIO hardware operation {operation!r} failed for pin {pin}")
 
 
 class GpioProviderUnavailable(RuntimeError):
-    """Indicate that the configured GPIO provider cannot be imported."""
+    """Indicate that the configured GPIO provider cannot be initialized."""
 
     def __init__(self, provider: str) -> None:
         """Initialize the provider availability error.
@@ -117,6 +114,26 @@ class GpioProviderUnavailable(RuntimeError):
             provider: Missing provider or package name.
         """
         self.provider = provider
+        super().__init__(f"GPIO provider {provider!r} is unavailable in this runtime")
+
+
+class GpioProviderError(RuntimeError):
+    """Indicate that a provider-wide lifecycle operation failed.
+
+    Attributes:
+        provider: Fully qualified provider class name.
+        operation: Provider lifecycle operation that failed.
+    """
+
+    def __init__(self, provider: str, operation: str) -> None:
+        """Initialize the provider lifecycle error.
+
+        Args:
+            provider: Fully qualified provider class name.
+            operation: Short description of the failed operation.
+        """
+        self.provider = provider
+        self.operation = operation
         super().__init__(
-            f"GPIO provider {provider!r} is unavailable in this runtime"
+            f"GPIO provider operation {operation!r} failed for {provider!r}"
         )

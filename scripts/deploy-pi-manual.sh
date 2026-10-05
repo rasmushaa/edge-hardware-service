@@ -45,7 +45,6 @@ ssh "${PI_HOST}" "
         --volume /run/udev:/run/udev:ro \
         --publish '${API_PORT}:8000' \
         --env EDGE_HARDWARE_SERVICE_BACKEND=rpi \
-        --env GPIOZERO_PIN_FACTORY=lgpio \
         '${IMAGE}'
 "
 

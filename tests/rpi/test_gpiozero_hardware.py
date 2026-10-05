@@ -1,88 +1,186 @@
-"""Opt-in smoke tests for GPIO devices on real Raspberry Pi hardware.
+"""Functional GPIO library tests for unconnected Raspberry Pi pins.
 
-Run these tests only inside the prepared Bookworm container on a Raspberry Pi:
+Run these tests natively on prepared Raspberry Pi OS through
+`make pi-hardware-test`. The suite requires three distinct, unconnected BCM
+pins and no external components or wiring. It verifies:
 
-    EDGE_HARDWARE_RPI_INPUT_PIN=17 \
-    EDGE_HARDWARE_RPI_OUTPUT_PIN=22 \
-    EDGE_HARDWARE_RPI_PWM_PIN=18 \
-    uv run pytest -m rpi
+* Input reads using the Raspberry Pi's internal pull-up and pull-down.
+* GPIO Zero digital-output state changes.
+* GPIO Zero PWM duty-cycle and frequency configuration.
 
-The selected output pins are actively driven during the tests. They must be
-safe to toggle and must not be connected to hardware that could be damaged or
-actuated unexpectedly.
+The suite does not measure electrical output levels or PWM waveforms. All pin
+selections are validated before GPIO Zero initializes, and teardown resets
+outputs before closing devices and the shared provider.
 """
 
 import os
+from collections.abc import Callable, Iterator
+from typing import TypeAlias
 
 import pytest
 
-from edge_hardware_service.hardware.gpio.protocols import GpioDeviceFactory
+from edge_hardware_service.hardware.gpio.protocols import (
+    DigitalOutputPinDevice,
+    GpioDeviceFactory,
+    PwmOutputPinDevice,
+)
 from edge_hardware_service.models.gpio import PullMode
-
+from tests.rpi.hardware_config import HardwarePins, load_hardware_pins
 
 pytestmark = pytest.mark.rpi
 
+DeviceCleanup: TypeAlias = Callable[[], None]
+PWM_TEST_FREQUENCY_HZ = 500.0
 
-def _configured_pin(variable: str) -> int:
-    """Return an explicitly configured BCM pin or skip the hardware test.
+
+def _run_cleanup(*operations: DeviceCleanup) -> None:
+    """Attempt every cleanup operation and report all failures together.
 
     Args:
-        variable: Environment variable containing a BCM pin number.
+        operations: Ordered reset and close operations.
 
-    Returns:
-        Configured BCM pin number.
+    Raises:
+        ExceptionGroup: If one or more cleanup operations fail.
     """
-    value = os.getenv(variable)
-    if value is None:
-        pytest.skip(f"{variable} must select a safe BCM pin")
-    return int(value)
+    failures: list[Exception] = []
+    for operation in operations:
+        try:
+            operation()
+        except Exception as error:
+            failures.append(error)
+
+    if failures:
+        raise ExceptionGroup("Raspberry Pi GPIO cleanup failed", failures)
 
 
-def _factory() -> GpioDeviceFactory:
-    """Import and create the OS-provided gpiozero factory when selected."""
+@pytest.fixture(scope="session")
+def hardware_pins() -> HardwarePins:
+    """Validate all requested pins before initializing a GPIO provider."""
+    try:
+        return load_hardware_pins(os.environ)
+    except ValueError as error:
+        pytest.fail(str(error), pytrace=False)
+
+
+@pytest.fixture(scope="session")
+def gpio_factory(
+    hardware_pins: HardwarePins,
+    request: pytest.FixtureRequest,
+) -> Iterator[GpioDeviceFactory]:
+    """Own one physical GPIO Zero provider for the complete test session."""
+    del hardware_pins
     pytest.importorskip("gpiozero")
     from edge_hardware_service.hardware.gpio.gpiozero_factory import (
         GpioZeroDeviceFactory,
     )
 
-    return GpioZeroDeviceFactory()
+    factory = GpioZeroDeviceFactory()
+    terminal_reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if terminal_reporter is not None:
+        controller = (
+            factory.controller if factory.controller is not None else "provider-managed"
+        )
+        gpiochips = ", ".join(factory.available_gpiochips) or "none"
+        terminal_reporter.write_line(
+            "Raspberry Pi GPIO provider: "
+            f"{factory.provider_name} "
+            f"(controller={controller}, gpiochips={gpiochips})"
+        )
 
-
-def test_rpi_input_can_be_opened_and_read() -> None:
-    """Open, read, and close a physical digital input."""
-    pin = _configured_pin("EDGE_HARDWARE_RPI_INPUT_PIN")
-    factory = _factory()
-    device = factory.create_input(pin, PullMode.NONE)
     try:
-        assert isinstance(device.value, bool)
+        yield factory
+    finally:
+        factory.close()
+
+
+@pytest.fixture
+def digital_output_device(
+    gpio_factory: GpioDeviceFactory,
+    hardware_pins: HardwarePins,
+) -> Iterator[DigitalOutputPinDevice]:
+    """Open a digital output and guarantee LOW cleanup."""
+    device = gpio_factory.create_digital_output(hardware_pins.output)
+    try:
+        yield device
+    finally:
+        _run_cleanup(
+            lambda: setattr(device, "value", False),
+            device.close,
+        )
+
+
+@pytest.fixture
+def pwm_output_device(
+    gpio_factory: GpioDeviceFactory,
+    hardware_pins: HardwarePins,
+) -> Iterator[PwmOutputPinDevice]:
+    """Open a PWM output and guarantee a zero-duty-cycle cleanup."""
+    device = gpio_factory.create_pwm_output(
+        hardware_pins.pwm,
+        PWM_TEST_FREQUENCY_HZ,
+    )
+    try:
+        yield device
+    finally:
+        _run_cleanup(
+            lambda: setattr(device, "value", 0.0),
+            device.close,
+        )
+
+
+@pytest.mark.parametrize(
+    ("pull", "expected"),
+    [
+        (PullMode.UP, True),
+        (PullMode.DOWN, False),
+    ],
+)
+def test_rpi_input_internal_pull_sets_expected_level(
+    gpio_factory: GpioDeviceFactory,
+    hardware_pins: HardwarePins,
+    pull: PullMode,
+    expected: bool,
+) -> None:
+    """Read the expected level from an unconnected internally pulled pin."""
+    device = gpio_factory.create_input(hardware_pins.input, pull)
+    try:
+        observed = device.value
+        expected_name = "HIGH" if expected else "LOW"
+        observed_name = "HIGH" if observed else "LOW"
+        assert observed is expected, (
+            f"BCM input {hardware_pins.input} with pull-{pull.value} "
+            f"expected {expected_name}, observed {observed_name}. Ensure the "
+            "pin is unconnected and not assigned to an active peripheral."
+        )
     finally:
         device.close()
 
 
-def test_rpi_digital_output_can_be_written() -> None:
-    """Open, toggle, reset, and close a physical digital output."""
-    pin = _configured_pin("EDGE_HARDWARE_RPI_OUTPUT_PIN")
-    factory = _factory()
-    device = factory.create_digital_output(pin)
-    try:
-        device.value = False
-        assert device.value is False
-        device.value = True
-        assert device.value is True
-        device.value = False
-    finally:
-        device.close()
+def test_rpi_digital_output_can_be_toggled(
+    digital_output_device: DigitalOutputPinDevice,
+) -> None:
+    """Drive, inspect, and reset a physical digital output."""
+    digital_output_device.value = False
+    assert digital_output_device.value is False
+
+    digital_output_device.value = True
+    assert digital_output_device.value is True
+
+    digital_output_device.value = False
+    assert digital_output_device.value is False
 
 
-def test_rpi_pwm_output_can_be_written() -> None:
-    """Open, drive, stop, and close a physical PWM output."""
-    pin = _configured_pin("EDGE_HARDWARE_RPI_PWM_PIN")
-    factory = _factory()
-    device = factory.create_pwm_output(pin, 500.0)
-    try:
-        device.value = 0.25
-        assert device.value == pytest.approx(0.25)
-        assert device.frequency == pytest.approx(500.0)
-        device.value = 0.0
-    finally:
-        device.close()
+def test_rpi_pwm_output_supports_duty_cycle_and_frequency(
+    pwm_output_device: PwmOutputPinDevice,
+) -> None:
+    """Exercise two duty cycles at an explicit physical PWM frequency."""
+    assert pwm_output_device.frequency == pytest.approx(PWM_TEST_FREQUENCY_HZ)
+
+    pwm_output_device.value = 0.25
+    assert pwm_output_device.value == pytest.approx(0.25)
+
+    pwm_output_device.value = 0.75
+    assert pwm_output_device.value == pytest.approx(0.75)
+
+    pwm_output_device.value = 0.0
+    assert pwm_output_device.value == pytest.approx(0.0)
