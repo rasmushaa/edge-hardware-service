@@ -9,7 +9,9 @@ ErrorCode: TypeAlias = Literal[
     "pin_mode_conflict",
     "pin_already_open",
     "validation_error",
+    "capability_unsupported",
     "hardware_unavailable",
+    "camera_timeout",
 ]
 
 
@@ -23,7 +25,9 @@ class ErrorResponse(BaseModel):
             "pin_mode_conflict",
             "pin_already_open",
             "validation_error",
+            "capability_unsupported",
             "hardware_unavailable",
+            "camera_timeout",
         ],
     )
     message: str = Field(description="Human-readable explanation of the error.")
@@ -70,9 +74,19 @@ class ErrorResponse(BaseModel):
                     },
                 },
                 {
+                    "code": "capability_unsupported",
+                    "message": "The active camera does not support autofocus",
+                    "details": {"component": "camera"},
+                },
+                {
                     "code": "hardware_unavailable",
                     "message": "The GPIO provider could not access pin 18.",
                     "details": {"pin": 18, "operation": "open PWM output"},
+                },
+                {
+                    "code": "camera_timeout",
+                    "message": "Autofocus did not complete within 10 seconds",
+                    "details": {"operation": "autofocus"},
                 },
             ]
         },

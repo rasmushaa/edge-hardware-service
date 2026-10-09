@@ -1,4 +1,4 @@
-.PHONY: build build-pi-hardware-test deploy format lint pre-commit pi-dev-setup pi-hardware-test pi-container-hardware-test test
+.PHONY: build build-pi-hardware-test build-pi-camera-hardware-test deploy format lint pre-commit pi-camera-hardware-test pi-container-camera-hardware-test pi-dev-setup pi-hardware-test pi-container-hardware-test test
 
 build:
 	docker buildx build \
@@ -13,6 +13,14 @@ build-pi-hardware-test:
 		--platform linux/arm64 \
 		--target rpi-hardware-test \
 		--tag edge-hardware-service:rpi-hardware-test \
+		--load \
+		.
+
+build-pi-camera-hardware-test:
+	docker buildx build \
+		--platform linux/arm64 \
+		--target rpi-camera-hardware-test \
+		--tag edge-hardware-service:rpi-camera-hardware-test \
 		--load \
 		.
 
@@ -45,3 +53,9 @@ pi-hardware-test:
 
 pi-container-hardware-test: build-pi-hardware-test
 	@./scripts/run-pi-container-hardware-tests.sh
+
+pi-camera-hardware-test:
+	@./scripts/run-pi-camera-hardware-tests.sh
+
+pi-container-camera-hardware-test: build-pi-camera-hardware-test
+	@./scripts/run-pi-container-camera-hardware-tests.sh

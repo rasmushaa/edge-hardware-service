@@ -10,6 +10,11 @@ The simulation runtime is a supported product mode. It is not a test mock. Its
 purpose is to let other applications integrate with the same HTTP contract on
 macOS, Linux, and CI machines without Raspberry Pi libraries or hardware.
 
+This document covers GPIO. The implemented capability-driven camera adapter,
+shared MJPEG frame broker, API contract, simulation behavior, and
+hardware-validation gates are defined separately in
+[`camera-roadmap.md`](camera-roadmap.md).
+
 ## Goals
 
 - Keep the implementation easy to read and change.

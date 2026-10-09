@@ -5,16 +5,17 @@
 [![runtime](https://img.shields.io/badge/runtime-Bookworm_ARM64-A22846)](#container-images)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 
-Containerized HTTP adapter for Raspberry Pi GPIO hardware. Applications use a
-small, versioned API instead of depending directly on Raspberry Pi OS hardware
-libraries, and the same API runs with an in-memory simulation backend on macOS,
-Linux, and CI.
+Containerized HTTP adapter for Raspberry Pi GPIO and Picamera2-compatible
+cameras. Applications use a small, versioned API instead of depending directly
+on Raspberry Pi OS hardware libraries, and the same API runs with deterministic
+simulation backends on macOS, Linux, and CI.
 
 > [!IMPORTANT]
 > This project is in pre-release development. GPIO API v1 and the Bookworm
 > ARM64 image are functional, but no GHCR image or compatibility guarantee has
-> been published yet. Camera libraries are packaged for future work; camera
-> endpoints are not currently implemented.
+> been published yet. Camera support discovers Picamera2 sensor modes and
+> controls at runtime; only hardware explicitly named in the validation notes
+> should be treated as physically validated.
 
 ## Quick start
 
@@ -60,18 +61,25 @@ when the host architecture differs.
 ## Project status
 
 The current service release is `0.1.0` and the public HTTP contract is API
-`v1`. Development currently focuses on GPIO:
+`v1`. The service currently provides:
 
 - Digital input with no pull, pull-up, or pull-down configuration.
 - Digital output reads and writes.
 - PWM duty-cycle and frequency control.
 - Pin configuration, status, registry inspection, and release.
 - Equivalent Raspberry Pi and deterministic simulation backends.
+- One shared MJPEG camera stream, latest-image access, runtime capability
+  discovery, optional focus controls, and nullable telemetry.
 
 Hardware validation currently covers Raspberry Pi 5 Model B, 64-bit Raspberry
 Pi OS Bookworm, and Python 3.11. See the
 [hardware validation roadmap](docs/hardware-validation-roadmap.md) for the
 exact scope and known limitations.
+
+The physical camera adapter accepts the Picamera2-compatible camera at index 0
+without a model allowlist. Support is capability-driven, so fixed-focus cameras
+can stream without autofocus controls. See the
+[camera support roadmap](docs/camera-roadmap.md) for limits and validation.
 
 ## Container images
 
@@ -88,13 +96,14 @@ apt repository. uv owns only the portable application dependencies. This keeps
 GPIO Zero, lgpio, `rpi-lgpio`, libcamera, Picamera2, and the compatible NumPy
 build aligned with the operating-system runtime.
 
-The Dockerfile provides three targets:
+The Dockerfile provides four targets:
 
 | Target | Purpose |
 | --- | --- |
 | `runtime` | Default single-worker production service. |
 | `container-smoke-test` | Portable unit and integration tests; safe on macOS/Linux. |
 | `rpi-hardware-test` | Opt-in ARM64 GPIO validation on a physical Raspberry Pi. |
+| `rpi-camera-hardware-test` | Opt-in ARM64 Picamera2 camera validation on a physical Raspberry Pi. |
 
 Run the portable container test with:
 
@@ -114,6 +123,12 @@ Broadcom GPIO numbers (BCM), not physical header positions.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | Check process readiness. |
+| `GET` | `/api/v1/camera` | Inspect camera state, effective stream, settings, and telemetry. |
+| `GET` | `/api/v1/camera/capabilities` | Inspect runtime-discovered sensor modes and controls. |
+| `PATCH` | `/api/v1/camera/settings` | Atomically update supported camera settings. |
+| `POST` | `/api/v1/camera/autofocus` | Run one-shot autofocus when advertised. |
+| `GET` | `/api/v1/camera/stream` | Consume the shared MJPEG stream. |
+| `GET` | `/api/v1/camera/image` | Read the latest encoded JPEG. |
 | `GET` | `/api/v1/gpio` | Inspect the backend and complete open-pin registry. |
 | `GET` | `/api/v1/gpio/{pin}` | Inspect one open pin. |
 | `PUT` | `/api/v1/gpio/{pin}/configuration` | Configure or reconfigure input, output, or PWM mode. |
@@ -136,9 +151,9 @@ signal for a stable physical value.
 | `EDGE_HARDWARE_SERVICE_BACKEND` | `simulation`, `rpi` | `simulation` | Select the portable in-memory or physical GPIO backend. |
 
 The simulation backend is a supported client-development mode, not a test
-mock. It keeps state for the lifetime of the process and exposes the same HTTP
-contract without importing Raspberry Pi packages. It does not simulate
-electrical circuits or timing.
+mock. It keeps GPIO state and loops a deterministic 1280x720 MJPEG fixture
+without importing Raspberry Pi packages. It does not simulate electrical
+circuits, optical quality, or arbitrary camera resolutions.
 
 Raspberry Pi mode initializes one shared GPIO Zero provider during startup.
 Startup fails before the health endpoint becomes ready if no provider is
@@ -152,19 +167,18 @@ ownership and the pin registry are process-local.
                               |
                      FastAPI + Pydantic
                               |
-                         GpioService
-                  (pin ownership and policy)
-                              |
-                    GpioDeviceFactory
-                         /          \
-                        /            \
-       GpioZeroDeviceFactory      SimulationDeviceFactory
+                GpioService          CameraService
+             (pin ownership)      (stream and policy)
+                    |                     |
+          GpioDeviceFactory          CameraDevice
+               /       \               /      \
+       GPIO Zero    Simulation     Picamera2  Simulation
               Raspberry Pi          macOS / Linux / CI
 ```
 
-The API layer validates HTTP data, `GpioService` owns pin lifecycle and mode
-rules, and interchangeable factories create physical or simulated devices.
-Raspberry Pi imports stay entirely outside the simulation startup path. See
+The API layer validates HTTP data; services own lifecycle and policy; adapters
+isolate physical providers from deterministic simulation. Raspberry Pi imports
+stay entirely outside the simulation startup path. See
 [GPIO API architecture](docs/architecture.md) for the detailed boundaries.
 
 ## Raspberry Pi deployment
@@ -222,6 +236,18 @@ internal pull-up/down input behavior, digital output state, PWM configuration,
 provider selection, and safe cleanup; it does not measure physical voltage or
 waveform accuracy.
 
+Validate the connected Picamera2 camera, first natively and then in the ARM64
+container:
+
+```shell
+make pi-camera-hardware-test
+make pi-container-camera-hardware-test
+```
+
+The camera suite discovers the active device's modes and focus controls. It
+tests only features the camera advertises and records the provider model; this
+does not imply validation of every Picamera2-compatible camera.
+
 ## Development
 
 Python 3.11 and [uv](https://docs.astral.sh/uv/) are required.
@@ -256,6 +282,8 @@ not run by commit hooks.
 | `docker run --rm edge-hardware-service:container-smoke-test` | Docker | Portable tests execute in the packaged test image. |
 | `make pi-hardware-test` | Raspberry Pi OS | Native OS packages, provider selection, and GPIO access. |
 | `make pi-container-hardware-test` | Raspberry Pi + Docker | Native/container provider parity and GPIO access from the ARM64 image. |
+| `make pi-camera-hardware-test` | Raspberry Pi OS | Native Picamera2 discovery, streaming, optional controls, and cleanup. |
+| `make pi-container-camera-hardware-test` | Raspberry Pi + Docker | The same camera behavior from the ARM64 image. |
 
 ### Raspberry Pi troubleshooting
 

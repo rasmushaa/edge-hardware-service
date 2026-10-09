@@ -11,6 +11,7 @@ from edge_hardware_service.config import Settings
 from edge_hardware_service.hardware.gpio.exceptions import (
     GpioProviderUnavailable,
 )
+from edge_hardware_service.services.camera import CameraService
 from edge_hardware_service.services.gpio import GpioService
 
 
@@ -30,11 +31,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Raspberry Pi packages must not be imported in simulation mode.
         if settings.hardware_backend == "simulation":
+            from edge_hardware_service.hardware.camera.simulation_factory import (
+                SimulationCameraDevice,
+            )
             from edge_hardware_service.hardware.gpio.simulation_factory import (
                 SimulationDeviceFactory,
             )
 
             gpio_factory = SimulationDeviceFactory()
+            camera_service = CameraService(
+                SimulationCameraDevice(),
+                backend="simulation",
+            )
         else:
             try:
                 from edge_hardware_service.hardware.gpio.gpiozero_factory import (
@@ -48,14 +56,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise
 
             gpio_factory = GpioZeroDeviceFactory()
+            try:
+                from edge_hardware_service.hardware.camera.picamera2_device import (
+                    Picamera2Device,
+                )
+
+                camera_service = CameraService(
+                    Picamera2Device(device_index=0),
+                    backend="rpi",
+                )
+            except Exception as error:
+                # Camera capability degrades independently. GPIO remains a
+                # required provider for the Raspberry Pi backend.
+                reason = str(error) or type(error).__name__
+                camera_service = CameraService.unavailable("rpi", reason)
 
         gpio_service = GpioService(gpio_factory)
         app.state.gpio_service = gpio_service
+        app.state.camera_service = camera_service
 
         try:
             yield
         finally:
-            gpio_service.close()
+            camera_error: Exception | None = None
+            try:
+                camera_service.close()
+            except Exception as error:
+                camera_error = error
+            try:
+                gpio_service.close()
+            except Exception as gpio_error:
+                if camera_error is not None:
+                    raise ExceptionGroup(
+                        "Hardware shutdown failed",
+                        [camera_error, gpio_error],
+                    ) from gpio_error
+                raise
+            if camera_error is not None:
+                raise camera_error
 
     app = FastAPI(
         title="Edge Hardware Service",

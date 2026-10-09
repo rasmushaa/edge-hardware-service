@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.142.2",
+    "piexif>=1.1.3",
     "uvicorn>=0.54.0",
 ]
 
@@ -34,4 +35,5 @@ addopts = "--import-mode=importlib -m 'not rpi'"
 testpaths = ["tests"]
 markers = [
     "rpi: tests that access Raspberry Pi GPIO hardware and require explicit pins",
+    "camera_rpi: tests that require a Raspberry Pi Camera Module 3",
 ]

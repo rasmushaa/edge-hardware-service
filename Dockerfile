@@ -80,7 +80,16 @@ RUN dpkg-query --show \
         python3-lgpio \
         python3-rpi-lgpio
 
-CMD ["python", "-m", "pytest", "-m", "rpi", "--verbose", "--showlocals", "-o", "cache_dir=/tmp/pytest-cache"]
+CMD ["python", "-m", "pytest", "-m", "rpi and not camera_rpi", "--verbose", "--showlocals", "-o", "cache_dir=/tmp/pytest-cache"]
+
+
+FROM container-smoke-test AS rpi-camera-hardware-test
+
+ENV EDGE_HARDWARE_SERVICE_BACKEND=rpi
+
+RUN dpkg-query --show python3-libcamera python3-picamera2
+
+CMD ["python", "-m", "pytest", "tests/rpi/test_picamera2_camera_hardware.py", "-m", "rpi and camera_rpi", "--verbose", "--showlocals", "-o", "cache_dir=/tmp/pytest-cache"]
 
 
 FROM system AS runtime

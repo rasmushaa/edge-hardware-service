@@ -429,6 +429,13 @@ Do not duplicate the full OpenAPI schema.
 
 Example:
 
+> [!NOTE]
+> The camera routes below were illustrative and are superseded by the
+> authoritative [Camera Module 3 MVP roadmap](camera-roadmap.md). Camera
+> endpoints are not currently implemented or validated. Implement exactly the
+> five routes locked in that roadmap and its
+> [CAM-01 ticket](tickets/CAM-01-camera-mvp.md), not the camera example below.
+
 ```text
 System
 GET  /health

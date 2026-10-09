@@ -64,5 +64,5 @@ ssh "${pi_host}" "
     EDGE_HARDWARE_RPI_INPUT_PIN='${input_pin}' \
     EDGE_HARDWARE_RPI_OUTPUT_PIN='${output_pin}' \
     EDGE_HARDWARE_RPI_PWM_PIN='${pwm_pin}' \
-        .venv/bin/pytest -m rpi --verbose --showlocals
+        .venv/bin/pytest -m 'rpi and not camera_rpi' --verbose --showlocals
 "
