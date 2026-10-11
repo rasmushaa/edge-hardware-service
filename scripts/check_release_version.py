@@ -40,9 +40,7 @@ def newest_version(versions: Iterable[str]) -> str | None:
     return max(parsed, default=None)[1] if parsed else None
 
 
-def release_tag_versions(
-    candidate: str, *, allow_candidate_tag: bool
-) -> list[str]:
+def release_tag_versions(candidate: str, *, allow_candidate_tag: bool) -> list[str]:
     """Read supported release versions from local Git tags."""
     tags = subprocess.run(
         ["git", "tag", "--list", "v*"],
