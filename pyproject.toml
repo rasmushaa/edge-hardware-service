@@ -1,6 +1,6 @@
 [project]
 name = "edge-hardware-service"
-version = "0.1.0"
+version = "0.1.1rc1"
 description = "Containerized HTTP adapter for Raspberry Pi GPIO hardware"
 readme = "README.md"
 license = "MIT"
