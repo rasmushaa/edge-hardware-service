@@ -329,7 +329,64 @@ Pre-commit checks basic file hygiene, YAML/TOML validity, Python lint rules,
 import ordering, and Ruff formatting. Raspberry Pi tests remain opt-in and are
 not run by commit hooks.
 
-### Raspberry Pi troubleshooting
+## DevOps
+
+### Normal commits and pull requests
+
+Development changes use ordinary branches and pull requests into `main`.
+Every branch push and pull request runs formatting, linting, and the complete
+non-hardware test suite. Pull requests targeting `main`, and commits that land
+on `main`, additionally build the production `runtime` image and require its
+`/api/v1/health` smoke test to pass. These CI builds are validation artifacts;
+they do not create Git tags, GitHub Releases, or published GHCR images.
+
+Raspberry Pi GPIO and camera tests remain manual because GitHub-hosted runners
+do not provide the required physical devices.
+
+### Release candidates and stable releases
+
+Releases start with a version-only pull request. GitHub CLI must be installed
+and authenticated locally, and `main` must be clean and exactly match
+`origin/main`.
+
+Create a release candidate with a PEP 440 `rcN` version:
+
+```shell
+make rc VERSION=0.1.0rc1
+```
+
+Promote a tested candidate to a stable release with:
+
+```shell
+make release VERSION=0.1.0
+```
+
+Each command creates a `release/v<version>` branch, updates `pyproject.toml`
+and `uv.lock`, runs pre-commit and non-hardware tests, commits the version
+change, pushes only the release branch, and opens a pull request into `main`.
+It never pushes directly to `main` and never creates a tag locally.
+
+Merging the release PR is the authorization to publish. A `main` workflow
+detects the project-version change, validates the release again, builds and
+smoke-tests the runtime image, and then creates the immutable `v<version>` tag.
+It publishes the exact image before creating the GitHub Release.
+
+| Version | GitHub Release | GHCR image |
+| --- | --- | --- |
+| `0.1.0rc1` | Prerelease `v0.1.0rc1` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.0rc1-bookworm` |
+| `0.1.0` | Stable release `v0.1.0` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.0-bookworm` |
+
+Stable releases also update
+`ghcr.io/rasmushaa/edge-hardware-service:latest-bookworm`; release candidates
+never move that alias. The latest stable GitHub Release is always available at
+<https://github.com/rasmushaa/edge-hardware-service/releases/latest>.
+
+The release workflow treats the tag, exact image, and GitHub Release as
+separate state. Rerunning a partially failed release creates only missing
+artifacts. An existing tag on another commit is a hard failure, and immutable
+version tags are never moved or overwritten.
+
+## Raspberry Pi troubleshooting
 
 - `Falling back from lgpio` is a warning, not necessarily a failure. Check the
   provider reported after fallback; the validated Pi 5 uses
@@ -353,21 +410,14 @@ The repository separates three versions:
   `v1.2.3`.
 - Image tags add the Raspberry Pi OS runtime, such as `1.2.3-bookworm`.
 
-During `0.x` development, releases should publish only immutable exact tags
-such as `0.1.0-bookworm`. After the first stable release, each Git tag is
-expected to publish:
+Release candidates use PEP 440 versions such as `0.1.0rc1`; stable versions use
+`MAJOR.MINOR.PATCH`. Every release publishes an immutable exact image tag such
+as `0.1.0rc1-bookworm` or `0.1.0-bookworm`. Stable releases additionally move
+`latest-bookworm` to the highest stable version. Prereleases never move it.
 
-- `MAJOR.MINOR.PATCH-bookworm` — immutable exact release.
-- `MAJOR.MINOR-bookworm` — newest compatible patch release.
-- `MAJOR-bookworm` — newest compatible release in that service major.
-
-Immutable tags will never be replaced. Consumers should use an exact tag for
-reproducible deployments. The floating compatibility tags are for users who
-explicitly want updates within a release line. No meaning is assigned to
-`latest` until a release workflow documents and enforces one.
-
-Creating Git tags and publishing GHCR images are intentionally outside the
-current pre-release workflow.
+Consumers should use an exact image tag for reproducible deployments. Release
+tags are created only by the release workflow after a version PR is merged;
+they are never created by ordinary CI or moved to another commit.
 
 ## Documentation
 

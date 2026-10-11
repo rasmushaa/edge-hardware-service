@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help no-hw-test no-hw-test-docker smoke-test hw-test hw-test-docker build deploy
+.PHONY: help no-hw-test no-hw-test-docker smoke-test hw-test hw-test-docker build deploy rc release
 
 SMOKE_IMAGE ?= edge-hardware-service:dev
 SMOKE_ATTEMPTS ?= 30
@@ -34,7 +34,15 @@ help:
 		'                          This does not run tests or access physical hardware.' \
 		'  make deploy             Prompt for a Pi SSH host, transfer that runtime image,' \
 		'                          replace the deployed container, and check /api/v1/health.' \
-		'                          This does not exercise GPIO or camera API operations.'
+		'                          This does not exercise GPIO or camera API operations.' \
+		'' \
+		'Opening release pull requests from main:' \
+		'  make rc VERSION=0.1.0rc1' \
+		'                          Create, validate, push, and open an RC release PR.' \
+		'  make release VERSION=0.1.0' \
+		'                          Create, validate, push, and open a stable release PR.' \
+		'                          Neither command pushes main or creates a tag. Merging the' \
+		'                          PR triggers the release GitHub Actions workflow.'
 
 no-hw-test:
 	@printf '%s\n' \
@@ -140,3 +148,9 @@ deploy:
 		'Deploying edge-hardware-service:dev, built from the runtime target.' \
 		'This replaces the named Pi container and verifies /api/v1/health only.'
 	@./scripts/deploy-pi-manual.sh
+
+rc:
+	@./scripts/create-release-pr.sh rc "$(VERSION)"
+
+release:
+	@./scripts/create-release-pr.sh stable "$(VERSION)"
