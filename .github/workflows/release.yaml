@@ -1,29 +1,44 @@
 # Release pipeline:
-# - Trigger: push a version tag such as v0.1.0. The tag is accepted only when its
-#   commit is contained in main and its value is "v" plus the version declared in
-#   pyproject.toml.
-# - Validation: rerun pre-commit and non-hardware tests, build the production
-#   runtime image, and require its /api/v1/health smoke test to pass.
-# - Image name: ghcr.io/<lowercase-owner>/<lowercase-repository>:
-#   <project-version>-bookworm. GitHub provides owner/repository through
-#   GITHUB_REPOSITORY; for this repository and version 0.1.0, the result is
-#   ghcr.io/rasmushaa/edge-hardware-service:0.1.0-bookworm.
-# - Publishing: push that exact image to GHCR, then create the matching GitHub
-#   Release with generated notes. This workflow does not create a latest tag.
-# - Authentication: secrets.GITHUB_TOKEN is created automatically by GitHub;
-#   no custom repository secret is required. The contents:write and packages:write
-#   permissions below allow release creation and GHCR publishing. Organization
-#   policy or a pre-existing unlinked package can still restrict those operations.
-# - Pull access follows the GHCR package visibility. A private package requires
-#   Docker authentication on the Raspberry Pi; a public package can be pulled
-#   without credentials.
+# - A release starts as a pull request created with `make rc VERSION=X.Y.ZrcN`
+#   or `make release VERSION=X.Y.Z`. That PR changes only the project version in
+#   pyproject.toml and uv.lock; the local helper never pushes main or creates tags.
+# - Trigger: a merge/push to main that changes pyproject.toml. The workflow reads
+#   both the previous and current project versions and exits successfully when the
+#   version did not change, so ordinary dependency edits do not publish releases.
+# - Version policy: X.Y.ZrcN creates a GitHub prerelease; X.Y.Z creates a stable
+#   release. Every new version must be greater than the previous project version
+#   and every existing release tag. The immutable Git tag is v<project-version>.
+#   A tag on the current commit is treated as a safe retry, while the same tag on
+#   another commit fails.
+# - Recovery: tag, exact GHCR image, and GitHub Release state are inspected
+#   independently. A rerun creates only missing artifacts; a fully published
+#   release is a successful no-op. Conflicting partial state fails without moving
+#   an existing version tag.
+# - Validation order: host checks, runtime-image build, and /api/v1/health smoke
+#   test must pass before a new Git tag is pushed. The exact image is published
+#   before the GitHub Release is created.
+# - Image naming: ghcr.io/<lowercase-owner>/<lowercase-repository>:
+#   <project-version>-bookworm. Stable releases also update latest-bookworm when
+#   they are the highest stable version; prereleases never move that alias.
+# - Authentication: secrets.GITHUB_TOKEN is created automatically by GitHub; no
+#   custom repository secret is required. The permissions below allow tag and
+#   GitHub Release creation plus GHCR publishing. The tag push intentionally does
+#   not start another workflow; this workflow completes the publication itself.
+# - Pull access follows GHCR package visibility. Private packages require Docker
+#   authentication on the Raspberry Pi; public packages can be pulled anonymously.
 # - Raspberry Pi hardware tests remain manual because hosted runners have no GPIO
 #   or camera devices.
 name: Release
 
 on:
   push:
-    tags: ["v[0-9]*"]
+    branches: [main]
+    paths:
+      - pyproject.toml
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -40,52 +55,176 @@ jobs:
 
       - uses: astral-sh/setup-uv@v8.3.2
 
-      - name: Validate release version
+      - name: Detect version change and tag state
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          git fetch origin main
-          git merge-base --is-ancestor HEAD origin/main
-
           VERSION=$(uv version --short)
-          test "$GITHUB_REF_NAME" = "v$VERSION"
+          if git cat-file -e "$BEFORE_SHA:pyproject.toml" 2>/dev/null; then
+            PREVIOUS_VERSION=$(git show "$BEFORE_SHA:pyproject.toml" \
+              | python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["project"]["version"])')
+          else
+            PREVIOUS_VERSION=""
+          fi
 
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PREVIOUS_VERSION=$PREVIOUS_VERSION" >> "$GITHUB_ENV"
 
+          if [[ "$VERSION" = "$PREVIOUS_VERSION" ]]; then
+            echo "SHOULD_RELEASE=false" >> "$GITHUB_ENV"
+            echo "Project version is unchanged; nothing will be published."
+            exit 0
+          fi
+
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+rc[1-9][0-9]*$ ]]; then
+            PRERELEASE=true
+          elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            PRERELEASE=false
+          else
+            echo "Unsupported release version: $VERSION" >&2
+            exit 1
+          fi
+
+          TAG="v$VERSION"
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Run tests
-        run: |
-          uv sync --locked
-          uv run pre-commit run --all-files
-          make no-hw-test
+          git fetch origin --tags
+          python3 scripts/check_release_version.py \
+            "$VERSION" \
+            --baseline "$PREVIOUS_VERSION" \
+            --allow-candidate-tag
 
-      - name: Build and smoke test
-        run: |
-          docker build \
-            --target runtime \
-            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            -t "$IMAGE:$VERSION-bookworm" .
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            TAG_COMMIT=$(git rev-list --max-count=1 "$TAG")
+            if [[ "$TAG_COMMIT" != "$GITHUB_SHA" ]]; then
+              echo "$TAG already points to $TAG_COMMIT, not $GITHUB_SHA." >&2
+              exit 1
+            fi
+            TAG_EXISTS=true
+          else
+            TAG_EXISTS=false
+          fi
 
-          make smoke-test \
-            SMOKE_IMAGE="$IMAGE:$VERSION-bookworm"
+          {
+            echo "SHOULD_RELEASE=true"
+            echo "PRERELEASE=$PRERELEASE"
+            echo "TAG=$TAG"
+            echo "TAG_EXISTS=$TAG_EXISTS"
+            echo "IMAGE=$IMAGE"
+          } >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
+        if: env.SHOULD_RELEASE == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish Docker image
-        run: |
-          docker push "$IMAGE:$VERSION-bookworm"
-
-      - name: Create GitHub Release
+      - name: Inspect published artifact state
+        if: env.SHOULD_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --verify-tag \
-            --generate-notes \
+          if docker buildx imagetools inspect \
+            "$IMAGE:$VERSION-bookworm" >/dev/null 2>&1; then
+            IMAGE_EXISTS=true
+          else
+            IMAGE_EXISTS=false
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            RELEASE_EXISTS=true
+          else
+            RELEASE_EXISTS=false
+          fi
+
+          if [[ "$TAG_EXISTS" = false \
+            && ( "$IMAGE_EXISTS" = true || "$RELEASE_EXISTS" = true ) ]]; then
+            echo "Release artifacts exist without the expected Git tag." >&2
+            exit 1
+          fi
+
+          if [[ "$TAG_EXISTS" = true \
+            && "$IMAGE_EXISTS" = true \
+            && "$RELEASE_EXISTS" = true ]]; then
+            RELEASE_COMPLETE=true
+          else
+            RELEASE_COMPLETE=false
+          fi
+
+          {
+            echo "IMAGE_EXISTS=$IMAGE_EXISTS"
+            echo "RELEASE_EXISTS=$RELEASE_EXISTS"
+            echo "RELEASE_COMPLETE=$RELEASE_COMPLETE"
+          } >> "$GITHUB_ENV"
+
+      - name: Report existing completed release
+        if: env.RELEASE_COMPLETE == 'true'
+        run: echo "$TAG is already fully published; nothing to do."
+
+      - name: Run tests
+        if: env.SHOULD_RELEASE == 'true' && env.RELEASE_COMPLETE != 'true'
+        run: |
+          uv sync --locked
+          uv run pre-commit run --all-files
+          make no-hw-test
+
+      - name: Build and smoke-test missing image
+        if: env.SHOULD_RELEASE == 'true' && env.RELEASE_COMPLETE != 'true' && env.IMAGE_EXISTS != 'true'
+        run: |
+          docker build \
+            --target runtime \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$IMAGE:$VERSION-bookworm" \
+            .
+
+          make smoke-test SMOKE_IMAGE="$IMAGE:$VERSION-bookworm"
+
+      - name: Create immutable release tag
+        if: env.SHOULD_RELEASE == 'true' && env.RELEASE_COMPLETE != 'true' && env.TAG_EXISTS != 'true'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag --annotate "$TAG" --message "Release $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Publish missing exact image
+        if: env.SHOULD_RELEASE == 'true' && env.RELEASE_COMPLETE != 'true' && env.IMAGE_EXISTS != 'true'
+        run: docker push "$IMAGE:$VERSION-bookworm"
+
+      - name: Update stable image alias
+        if: env.SHOULD_RELEASE == 'true' && env.RELEASE_COMPLETE != 'true' && env.PRERELEASE == 'false'
+        run: |
+          LATEST_STABLE_TAG=$(git tag --list 'v*' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V \
+            | tail -n 1)
+
+          if [[ "$TAG" = "$LATEST_STABLE_TAG" ]]; then
+            docker buildx imagetools create \
+              --tag "$IMAGE:latest-bookworm" \
+              "$IMAGE:$VERSION-bookworm"
+          else
+            echo "$TAG is not the highest stable version; latest-bookworm is unchanged."
+          fi
+
+      - name: Create missing GitHub Release
+        if: env.SHOULD_RELEASE == 'true' && env.RELEASE_COMPLETE != 'true' && env.RELEASE_EXISTS != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_args=(
+            "$TAG"
+            --verify-tag
+            --generate-notes
             --notes "Docker image: \`$IMAGE:$VERSION-bookworm\`"
+          )
+
+          if [[ "$PRERELEASE" = true ]]; then
+            release_args+=(--prerelease --latest=false)
+          fi
+
+          gh release create "${release_args[@]}"
