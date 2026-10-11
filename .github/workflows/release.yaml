@@ -1,0 +1,91 @@
+# Release pipeline:
+# - Trigger: push a version tag such as v0.1.0. The tag is accepted only when its
+#   commit is contained in main and its value is "v" plus the version declared in
+#   pyproject.toml.
+# - Validation: rerun pre-commit and non-hardware tests, build the production
+#   runtime image, and require its /api/v1/health smoke test to pass.
+# - Image name: ghcr.io/<lowercase-owner>/<lowercase-repository>:
+#   <project-version>-bookworm. GitHub provides owner/repository through
+#   GITHUB_REPOSITORY; for this repository and version 0.1.0, the result is
+#   ghcr.io/rasmushaa/edge-hardware-service:0.1.0-bookworm.
+# - Publishing: push that exact image to GHCR, then create the matching GitHub
+#   Release with generated notes. This workflow does not create a latest tag.
+# - Authentication: secrets.GITHUB_TOKEN is created automatically by GitHub;
+#   no custom repository secret is required. The contents:write and packages:write
+#   permissions below allow release creation and GHCR publishing. Organization
+#   policy or a pre-existing unlinked package can still restrict those operations.
+# - Pull access follows the GHCR package visibility. A private package requires
+#   Docker authentication on the Raspberry Pi; a public package can be pulled
+#   without credentials.
+# - Raspberry Pi hardware tests remain manual because hosted runners have no GPIO
+#   or camera devices.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v9
+
+      - name: Validate release version
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+
+          VERSION=$(uv version --short)
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Run tests
+        run: |
+          uv sync --locked
+          uv run pre-commit run --all-files
+          make no-hw-test
+
+      - name: Build and smoke test
+        run: |
+          docker build \
+            --target runtime \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            -t "$IMAGE:$VERSION-bookworm" .
+
+          make smoke-test \
+            SMOKE_IMAGE="$IMAGE:$VERSION-bookworm"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Docker image
+        run: |
+          docker push "$IMAGE:$VERSION-bookworm"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --notes "Docker image: \`$IMAGE:$VERSION-bookworm\`"

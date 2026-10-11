@@ -1,6 +1,9 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help no-hw-test no-hw-test-docker hw-test hw-test-docker build deploy
+.PHONY: help no-hw-test no-hw-test-docker smoke-test hw-test hw-test-docker build deploy
+
+SMOKE_IMAGE ?= edge-hardware-service:dev
+SMOKE_ATTEMPTS ?= 30
 
 help:
 	@printf '%s\n' \
@@ -12,6 +15,9 @@ help:
 		'  make no-hw-test-docker  Build the container-no-hw-test image and run the' \
 		'                          same non-hardware suite inside its Bookworm image.' \
 		'                          This does not start Uvicorn or access devices.' \
+		'  make smoke-test         Start SMOKE_IMAGE with the simulation backend and' \
+		'                          wait for /api/v1/health to return {"status":"ok"}.' \
+		'                          Defaults to edge-hardware-service:dev.' \
 		'' \
 		'Testing on Raspberry Pi 5 Bookworm hardware:' \
 		'  make hw-test            Sync this checkout to the Pi, recreate the remote' \
@@ -27,7 +33,7 @@ help:
 		'                          port 8000, and run attached until Ctrl+C.' \
 		'                          This does not run tests or access physical hardware.' \
 		'  make deploy             Prompt for a Pi SSH host, transfer that runtime image,' \
-		'                          replace the deployed container, and check /health.' \
+		'                          replace the deployed container, and check /api/v1/health.' \
 		'                          This does not exercise GPIO or camera API operations.'
 
 no-hw-test:
@@ -49,6 +55,37 @@ no-hw-test-docker:
 	docker run --rm \
 		--platform linux/arm64 \
 		edge-hardware-service:container-no-hw-test
+
+smoke-test:
+	@printf '%s\n' \
+		'Starting $(SMOKE_IMAGE) with the simulation backend.' \
+		'Waiting for /api/v1/health to report status ok.'
+	@set -eu; \
+		container_id="$$(docker run --detach \
+			--env EDGE_HARDWARE_SERVICE_BACKEND=simulation \
+			"$(SMOKE_IMAGE)")"; \
+		cleanup() { \
+			docker rm --force "$$container_id" >/dev/null 2>&1 || true; \
+		}; \
+		trap cleanup EXIT INT TERM; \
+		attempt=1; \
+		while [ "$$attempt" -le "$(SMOKE_ATTEMPTS)" ]; do \
+			if health="$$(docker exec "$$container_id" python -c \
+				'import json, urllib.request; body = json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/v1/health", timeout=1)); assert body == {"status": "ok"}, body; print(json.dumps(body, separators=(",", ":")))' \
+				2>/dev/null)"; then \
+				printf 'Health check passed: %s\n' "$$health"; \
+				exit 0; \
+			fi; \
+			if ! docker inspect --format '{{.State.Running}}' "$$container_id" 2>/dev/null \
+				| grep -qx true; then \
+				break; \
+			fi; \
+			attempt=$$((attempt + 1)); \
+			sleep 1; \
+		done; \
+		printf '%s\n' 'Health check failed. Container logs:' >&2; \
+		docker logs "$$container_id" >&2 || true; \
+		exit 1
 
 hw-test:
 	@printf '%s\n' \
