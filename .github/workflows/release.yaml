@@ -6,8 +6,10 @@
 #   both the previous and current project versions and exits successfully when the
 #   version did not change, so ordinary dependency edits do not publish releases.
 # - Version policy: X.Y.ZrcN creates a GitHub prerelease; X.Y.Z creates a stable
-#   release. The immutable Git tag is v<project-version>. A tag on the current
-#   commit is treated as a safe retry, while the same tag on another commit fails.
+#   release. Every new version must be greater than the previous project version
+#   and every existing release tag. The immutable Git tag is v<project-version>.
+#   A tag on the current commit is treated as a safe retry, while the same tag on
+#   another commit fails.
 # - Recovery: tag, exact GHCR image, and GitHub Release state are inspected
 #   independently. A rerun creates only missing artifacts; a fully published
 #   release is a successful no-op. Conflicting partial state fails without moving
@@ -87,6 +89,11 @@ jobs:
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
 
           git fetch origin --tags
+          python3 scripts/check_release_version.py \
+            "$VERSION" \
+            --baseline "$PREVIOUS_VERSION" \
+            --allow-candidate-tag
+
           if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
             TAG_COMMIT=$(git rev-list --max-count=1 "$TAG")
             if [[ "$TAG_COMMIT" != "$GITHUB_SHA" ]]; then

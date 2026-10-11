@@ -352,19 +352,25 @@ and authenticated locally, and `main` must be clean and exactly match
 Create a release candidate with a PEP 440 `rcN` version:
 
 ```shell
-make rc VERSION=0.1.0rc1
+make rc VERSION=0.1.1rc1
 ```
 
 Promote a tested candidate to a stable release with:
 
 ```shell
-make release VERSION=0.1.0
+make release VERSION=0.1.1
 ```
 
 Each command creates a `release/v<version>` branch, updates `pyproject.toml`
 and `uv.lock`, runs pre-commit and non-hardware tests, commits the version
 change, pushes only the release branch, and opens a pull request into `main`.
 It never pushes directly to `main` and never creates a tag locally.
+
+The requested version must be strictly greater than both the current project
+version and every existing release tag. Release ordering follows RC semantics:
+`0.1.0rc1 < 0.1.0rc2 < 0.1.0 < 0.1.1rc1`. The local command checks this before
+opening the PR, and the release workflow repeats the check after merge so a
+manually created version PR cannot bypass it.
 
 Merging the release PR is the authorization to publish. A `main` workflow
 detects the project-version change, validates the release again, builds and
@@ -373,8 +379,8 @@ It publishes the exact image before creating the GitHub Release.
 
 | Version | GitHub Release | GHCR image |
 | --- | --- | --- |
-| `0.1.0rc1` | Prerelease `v0.1.0rc1` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.0rc1-bookworm` |
-| `0.1.0` | Stable release `v0.1.0` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.0-bookworm` |
+| `0.1.1rc1` | Prerelease `v0.1.1rc1` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.1rc1-bookworm` |
+| `0.1.1` | Stable release `v0.1.1` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.1-bookworm` |
 
 Stable releases also update
 `ghcr.io/rasmushaa/edge-hardware-service:latest-bookworm`; release candidates

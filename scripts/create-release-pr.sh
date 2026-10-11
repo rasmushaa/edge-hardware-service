@@ -8,8 +8,8 @@ version="${2:-}"
 usage() {
     cat <<'EOF'
 Usage:
-  make rc VERSION=0.1.0rc1
-  make release VERSION=0.1.0
+  make rc VERSION=0.1.1rc1
+  make release VERSION=0.1.1
 
 The command creates a release branch from a clean, up-to-date main branch,
 updates the project version, runs checks, pushes only the release branch, and
@@ -83,6 +83,10 @@ if [[ "$current_version" = "$version" ]]; then
         "$version" >&2
     exit 1
 fi
+
+python3 scripts/check_release_version.py \
+    "$version" \
+    --baseline "$current_version"
 
 if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
     printf 'Tag already exists: %s\n' "$tag" >&2

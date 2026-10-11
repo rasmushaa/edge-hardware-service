@@ -37,10 +37,11 @@ help:
 		'                          This does not exercise GPIO or camera API operations.' \
 		'' \
 		'Opening release pull requests from main:' \
-		'  make rc VERSION=0.1.0rc1' \
+		'  make rc VERSION=0.1.1rc1' \
 		'                          Create, validate, push, and open an RC release PR.' \
-		'  make release VERSION=0.1.0' \
+		'  make release VERSION=0.1.1' \
 		'                          Create, validate, push, and open a stable release PR.' \
+		'                          The version must be newer than the project and all tags.' \
 		'                          Neither command pushes main or creates a tag. Merging the' \
 		'                          PR triggers the release GitHub Actions workflow.'
 
