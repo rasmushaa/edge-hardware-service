@@ -1,0 +1,54 @@
+# CI policy:
+# - Every branch push and pull request runs the fast host-side checks.
+# - Pull requests targeting main, and pushes that land on main, additionally build
+#   and smoke-test the production runtime image.
+# - Raspberry Pi hardware tests remain manual because hosted runners have no GPIO
+#   or camera devices.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Pre-commit checks
+        run: uv run pre-commit run --all-files
+
+      - name: Non-hardware tests
+        run: make no-hw-test
+
+  runtime-image:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --target runtime \
+            --tag edge-hardware-service:ci \
+            .
+
+      - name: Smoke test Docker image
+        run: make smoke-test SMOKE_IMAGE=edge-hardware-service:ci
