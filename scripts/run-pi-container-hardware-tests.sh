@@ -1,30 +1,63 @@
 #!/usr/bin/env bash
 
-# Transfer the ARM64 test image and validate GPIO access inside the container.
+# Transfer and run the combined GPIO and camera ARM64 hardware test image.
 
 set -euo pipefail
 
-readonly IMAGE="edge-hardware-service:rpi-hardware-test"
+readonly IMAGE="edge-hardware-service:container-hw-test"
 readonly RUNNING_API_CONTAINER="edge-hardware-service"
 readonly PROVIDER_PROBE='from gpiozero import Device; Device.ensure_pin_factory(); factory = Device.pin_factory; print(type(factory).__module__ + "." + type(factory).__qualname__); factory.close()'
 
-read -r -p "Raspberry Pi SSH host (user@host): " pi_host
-if [ -z "${pi_host}" ]; then
-    echo "An SSH host is required." >&2
+if [ "$#" -ne 0 ]; then
+    echo "This command takes no arguments; it prompts for every required value." >&2
     exit 1
 fi
 
-read -r -p "Unconnected BCM input pin: " input_pin
-read -r -p "Unconnected BCM digital-output pin: " output_pin
-read -r -p "Unconnected BCM PWM-output pin: " pwm_pin
+echo "Containerized Raspberry Pi GPIO and camera hardware tests"
+echo
+echo "Requirements:"
+echo "- Raspberry Pi 5 running Raspberry Pi OS Bookworm with Docker access."
+echo "- A Picamera2-compatible camera must be available at index 0."
+echo "- Choose three distinct, unconnected BCM pins from 2 through 27."
+echo "- The pins must not be assigned to an overlay, peripheral, or other process."
+echo "- Stop the deployed edge-hardware-service container before testing."
+echo
+echo "What this tests:"
+echo "- ARM64 image packaging and Raspberry Pi OS GPIO/camera packages."
+echo "- Native/container GPIO Zero provider parity and real GPIO access."
+echo "- Real Picamera2 streaming and advertised controls from inside the container."
+echo "- It uses a test image, not the deployed runtime HTTP API."
+echo "- It does not measure voltage or inspect PWM waveforms."
+echo
 
-for pin in "${input_pin}" "${output_pin}" "${pwm_pin}"; do
-    if ! [[ "${pin}" =~ ^[0-9]+$ ]]; then
-        echo "BCM pins must be non-negative integers." >&2
+if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+    echo "Image ${IMAGE} is unavailable; run this through 'make hw-test-docker'." >&2
+    exit 1
+fi
+
+architecture="$(docker image inspect "${IMAGE}" --format '{{.Architecture}}')"
+if [ "${architecture}" != "arm64" ]; then
+    echo "Image ${IMAGE} is ${architecture}; expected arm64." >&2
+    exit 1
+fi
+
+read -r -p "Raspberry Pi SSH host (user@host): " pi_host
+if [ -z "${pi_host}" ]; then
+    echo "An SSH host is required, for example pi@edgepi.local." >&2
+    exit 1
+fi
+
+read -r -p "Unconnected BCM input pin (2-27): " input_pin
+read -r -p "Unconnected BCM digital-output pin (2-27): " output_pin
+read -r -p "Unconnected BCM PWM-output pin (2-27): " pwm_pin
+
+for selected_pin in "${input_pin}" "${output_pin}" "${pwm_pin}"; do
+    if ! [[ "${selected_pin}" =~ ^[0-9]+$ ]]; then
+        echo "BCM pins must be integers from 2 through 27." >&2
         exit 1
     fi
-    if [ "${pin}" -lt 2 ] || [ "${pin}" -gt 27 ]; then
-        echo "Select GPIO pins from BCM 2 through BCM 27." >&2
+    if [ "${selected_pin}" -lt 2 ] || [ "${selected_pin}" -gt 27 ]; then
+        echo "BCM pin ${selected_pin} is outside the supported range 2 through 27." >&2
         exit 1
     fi
 done
@@ -36,29 +69,17 @@ if [ "${input_pin}" = "${output_pin}" ] \
     exit 1
 fi
 
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-    echo "Image ${IMAGE} is unavailable." >&2
-    exit 1
-fi
-
-architecture="$(docker image inspect "${IMAGE}" --format '{{.Architecture}}')"
-if [ "${architecture}" != "arm64" ]; then
-    echo "Image ${IMAGE} is ${architecture}; expected arm64." >&2
-    exit 1
-fi
-
 echo
-echo "Raspberry Pi container GPIO compatibility test"
-echo
-echo "No external test hardware or wiring is required."
-echo "Leave BCM ${input_pin}, BCM ${output_pin}, and BCM ${pwm_pin} unconnected."
-echo "Stop any other process or container that may own these pins."
-echo "The test image runs with --privileged and a read-only /run/udev mount."
-echo "It runs as root, matching the current production container configuration."
-echo "It compares native and container provider selection before opening pins."
-read -r -p "Confirm these pins are unconnected and safe to drive [y/N]: " confirmation
+echo "The privileged test container will use:"
+echo "- SSH target: ${pi_host}"
+echo "- Input: BCM ${input_pin} (internal pull-up and pull-down reads)"
+echo "- Digital output: BCM ${output_pin} (driven LOW and HIGH, then left LOW)"
+echo "- PWM output: BCM ${pwm_pin} (duty cycle changes, then left at zero)"
+echo "- Camera: Picamera2 index 0"
+echo "- Device access: --privileged with /run/udev mounted read-only"
+read -r -p "Confirm the pins are unconnected and the camera is available [y/N]: " confirmation
 if [[ ! "${confirmation}" =~ ^[Yy]$ ]]; then
-    echo "Container hardware test cancelled."
+    echo "Container hardware tests cancelled."
     exit 1
 fi
 
@@ -70,13 +91,14 @@ ssh "${pi_host}" "
     test -r /proc/device-tree/model
     model=\$(tr -d '\\000' < /proc/device-tree/model)
     case \"\${model}\" in
-        *\"Raspberry Pi\"*) ;;
-        *) echo \"Target is not a Raspberry Pi: \${model}\" >&2; exit 1 ;;
+        *\"Raspberry Pi 5\"*) ;;
+        *) echo \"Target is not a Raspberry Pi 5: \${model}\" >&2; exit 1 ;;
     esac
+    grep --quiet 'VERSION_CODENAME=bookworm' /etc/os-release
     if docker ps --format '{{.Names}}' \
         | grep --quiet --line-regexp '${RUNNING_API_CONTAINER}'; then
-        echo \"Container ${RUNNING_API_CONTAINER} is running and may own GPIO.\" >&2
-        echo \"Stop it before running this test.\" >&2
+        echo \"Container ${RUNNING_API_CONTAINER} is running and may own the hardware.\" >&2
+        echo \"Stop it before running container hardware tests.\" >&2
         exit 1
     fi
     echo \"Target: \${model}\"
@@ -95,9 +117,9 @@ ssh "${pi_host}" "
     done
 "
 
-echo "Installed container provider packages:"
+echo "Installed container hardware packages:"
 ssh "${pi_host}" "
-    for package in python3-gpiozero python3-lgpio python3-rpi-lgpio; do
+    for package in python3-gpiozero python3-lgpio python3-rpi-lgpio python3-libcamera python3-picamera2; do
         docker run --rm '${IMAGE}' \
             dpkg-query --show \
             --showformat='\${binary:Package}=\${Version}\\n' \
@@ -126,7 +148,7 @@ if [ "${native_provider}" != "${container_provider}" ]; then
     exit 1
 fi
 
-echo "Running the unconnected-pin suite inside the ARM64 image..."
+echo "Running combined hardware tests inside the ARM64 image..."
 ssh "${pi_host}" "
     docker run --rm \
         --privileged \
@@ -137,4 +159,4 @@ ssh "${pi_host}" "
         '${IMAGE}'
 "
 
-echo "Container GPIO compatibility test passed with ${container_provider}."
+echo "Containerized GPIO and camera hardware tests passed with ${container_provider}."

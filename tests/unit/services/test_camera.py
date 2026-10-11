@@ -7,12 +7,10 @@ from time import monotonic
 
 import pytest
 
-from edge_hardware_service.hardware.camera.exceptions import (
-    CameraAutofocusTimeout,
-    CameraCapabilityUnsupported,
-    CameraNotReady,
-    CameraOperationError,
-    CameraUnavailable,
+from edge_hardware_service.errors import (
+    HardwareUnavailableError,
+    InvalidRequestError,
+    OperationTimeoutError,
 )
 from edge_hardware_service.hardware.camera.simulation_factory import _split_mjpeg
 from edge_hardware_service.models.camera import (
@@ -88,13 +86,13 @@ class FakeCameraDevice:
     def validate_settings(self, settings: CameraSettings) -> None:
         self.validation_calls.append(settings)
         if settings.focus.mode not in self.capabilities.focus.modes:
-            raise CameraCapabilityUnsupported("unsupported focus mode")
+            raise InvalidRequestError("unsupported focus mode")
         if settings.focus.mode == "manual":
             lens = self.capabilities.focus.lens_position_diopters
             assert lens is not None
             position = settings.focus.lens_position_diopters
             if not lens.minimum <= position <= lens.maximum:
-                raise CameraCapabilityUnsupported("outside advertised range")
+                raise InvalidRequestError("outside advertised range")
 
     def reconfigure(self, settings: CameraSettings) -> None:
         self.reconfigure_calls.append(settings)
@@ -258,7 +256,7 @@ def test_unsupported_patch_is_rejected_before_reconfigure() -> None:
     )
     service = CameraService(device, backend="rpi")
 
-    with pytest.raises(CameraCapabilityUnsupported, match="unsupported"):
+    with pytest.raises(InvalidRequestError, match="unsupported"):
         service.update_settings(CameraSettingsPatch(focus=AutoFocus(mode="auto")))
 
     assert device.reconfigure_calls == []
@@ -270,7 +268,7 @@ def test_manual_focus_uses_discovered_limits() -> None:
     device = FakeCameraDevice()
     service = CameraService(device, backend="rpi")
 
-    with pytest.raises(CameraCapabilityUnsupported, match="advertised range"):
+    with pytest.raises(InvalidRequestError, match="advertised range"):
         service.update_settings(
             CameraSettingsPatch(
                 focus={  # type: ignore[arg-type]
@@ -289,7 +287,7 @@ def test_failed_reconfiguration_rolls_back_previous_settings() -> None:
     device.reconfigure_failures = [RuntimeError("candidate failed"), None]
     service = CameraService(device, backend="rpi")
 
-    with pytest.raises(CameraOperationError, match="candidate failed"):
+    with pytest.raises(HardwareUnavailableError, match="candidate failed"):
         service.update_settings(
             CameraSettingsPatch(sensor_resolution=resolution(1920, 1080))
         )
@@ -308,7 +306,7 @@ def test_rollback_failure_marks_camera_unavailable() -> None:
     ]
     service = CameraService(device, backend="rpi")
 
-    with pytest.raises(CameraOperationError, match="rollback failed"):
+    with pytest.raises(HardwareUnavailableError, match="rollback failed"):
         service.update_settings(
             CameraSettingsPatch(sensor_resolution=resolution(1920, 1080))
         )
@@ -326,7 +324,7 @@ def test_missing_reconfigured_frame_rolls_back(
     device.publish_after_reconfigure = [False, True]
     service = CameraService(device, backend="rpi")
 
-    with pytest.raises(CameraNotReady, match="No frame arrived"):
+    with pytest.raises(HardwareUnavailableError, match="No frame arrived"):
         service.update_settings(
             CameraSettingsPatch(sensor_resolution=resolution(1920, 1080))
         )
@@ -356,7 +354,7 @@ def test_unsupported_autofocus_does_not_change_settings() -> None:
     )
     service = CameraService(device, backend="rpi")
 
-    with pytest.raises(CameraCapabilityUnsupported, match="autofocus"):
+    with pytest.raises(InvalidRequestError, match="autofocus"):
         service.autofocus()
 
     assert service.settings.focus.mode == "unmanaged"
@@ -366,10 +364,10 @@ def test_unsupported_autofocus_does_not_change_settings() -> None:
 
 def test_autofocus_timeout_remains_a_timeout() -> None:
     device = FakeCameraDevice()
-    device.autofocus_result = CameraAutofocusTimeout("timed out")
+    device.autofocus_result = OperationTimeoutError("timed out")
     service = CameraService(device, backend="rpi")
 
-    with pytest.raises(CameraAutofocusTimeout, match="timed out"):
+    with pytest.raises(OperationTimeoutError, match="timed out"):
         service.autofocus()
 
     assert service.settings.focus.mode == "auto"
@@ -382,7 +380,7 @@ def test_startup_failure_degrades_status_and_capabilities() -> None:
     service = CameraService(device, backend="rpi")
 
     assert service.status().state == "unavailable"
-    with pytest.raises(CameraUnavailable, match="camera missing"):
+    with pytest.raises(HardwareUnavailableError, match="camera missing"):
         service.capabilities()
     service.close()
     service.close()

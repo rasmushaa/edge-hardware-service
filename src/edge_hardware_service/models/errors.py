@@ -1,18 +1,8 @@
 """Pydantic schema for stable API error responses."""
 
-from typing import Literal, TypeAlias
-
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-ErrorCode: TypeAlias = Literal[
-    "pin_not_open",
-    "pin_mode_conflict",
-    "pin_already_open",
-    "validation_error",
-    "capability_unsupported",
-    "hardware_unavailable",
-    "camera_timeout",
-]
+from edge_hardware_service.errors import ErrorCode
 
 
 class ErrorResponse(BaseModel):
@@ -21,13 +11,11 @@ class ErrorResponse(BaseModel):
     code: ErrorCode = Field(
         description="Stable machine-readable error code.",
         examples=[
-            "pin_not_open",
-            "pin_mode_conflict",
-            "pin_already_open",
-            "validation_error",
-            "capability_unsupported",
+            "not_found",
+            "conflict",
+            "invalid_request",
             "hardware_unavailable",
-            "camera_timeout",
+            "operation_timeout",
         ],
     )
     message: str = Field(description="Human-readable explanation of the error.")
@@ -42,26 +30,22 @@ class ErrorResponse(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "code": "pin_not_open",
+                    "code": "not_found",
                     "message": "GPIO pin 17 is not open",
-                    "details": {"pin": 17},
+                    "details": {"component": "gpio", "pin": 17},
                 },
                 {
-                    "code": "pin_mode_conflict",
+                    "code": "conflict",
                     "message": "GPIO pin 17 is open as output, not input",
                     "details": {
+                        "component": "gpio",
                         "pin": 17,
                         "active_mode": "output",
                         "requested_mode": "input",
                     },
                 },
                 {
-                    "code": "pin_already_open",
-                    "message": "GPIO pin 17 is already open",
-                    "details": {"pin": 17},
-                },
-                {
-                    "code": "validation_error",
+                    "code": "invalid_request",
                     "message": "Request validation failed",
                     "details": {
                         "errors": [
@@ -74,19 +58,21 @@ class ErrorResponse(BaseModel):
                     },
                 },
                 {
-                    "code": "capability_unsupported",
-                    "message": "The active camera does not support autofocus",
-                    "details": {"component": "camera"},
-                },
-                {
                     "code": "hardware_unavailable",
                     "message": "The GPIO provider could not access pin 18.",
-                    "details": {"pin": 18, "operation": "open PWM output"},
+                    "details": {
+                        "component": "gpio",
+                        "pin": 18,
+                        "operation": "open PWM output",
+                    },
                 },
                 {
-                    "code": "camera_timeout",
+                    "code": "operation_timeout",
                     "message": "Autofocus did not complete within 10 seconds",
-                    "details": {"operation": "autofocus"},
+                    "details": {
+                        "component": "camera",
+                        "operation": "autofocus",
+                    },
                 },
             ]
         },

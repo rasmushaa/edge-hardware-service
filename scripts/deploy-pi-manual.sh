@@ -1,18 +1,39 @@
 #!/usr/bin/env bash
 
-# Transfer the development image to a Raspberry Pi and start the hardware API.
+# Transfer the runtime image to a Raspberry Pi and start the hardware API.
 
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-    echo "Usage: $0 user@host" >&2
+if [ "$#" -ne 0 ]; then
+    echo "This command takes no arguments; it prompts for the Raspberry Pi host." >&2
     exit 1
 fi
 
-readonly PI_HOST="$1"
 readonly IMAGE="edge-hardware-service:dev"
 readonly CONTAINER_NAME="edge-hardware-service"
 readonly API_PORT="8000"
+
+echo "Manual Raspberry Pi runtime deployment"
+echo
+echo "Requirements:"
+echo "- Run 'make build' first to create the linux/arm64 runtime image."
+echo "- The SSH user must be able to run Docker on the Raspberry Pi."
+echo "- Deployment replaces the '${CONTAINER_NAME}' container if it exists."
+echo "- The container runs privileged with /run/udev mounted read-only."
+echo "- The final check calls /api/v1/health only; it does not exercise pins or camera endpoints."
+echo
+read -r -p "Raspberry Pi SSH host (user@host): " pi_host
+if [ -z "${pi_host}" ]; then
+    echo "An SSH host is required, for example pi@edgepi.local." >&2
+    exit 1
+fi
+read -r -p "Replace ${CONTAINER_NAME} on ${pi_host} with ${IMAGE} [y/N]: " confirmation
+if [[ ! "${confirmation}" =~ ^[Yy]$ ]]; then
+    echo "Deployment cancelled."
+    exit 1
+fi
+
+readonly PI_HOST="${pi_host}"
 readonly PUBLIC_API_URL="http://${PI_HOST#*@}:${API_PORT}"
 
 if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then

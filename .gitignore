@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python build and packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+
+# Test and coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editor workspace files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

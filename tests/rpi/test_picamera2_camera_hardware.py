@@ -10,7 +10,7 @@ import piexif
 import pytest
 
 from edge_hardware_service.api.routers.camera import _mjpeg_part, get_camera_image
-from edge_hardware_service.hardware.camera.exceptions import CameraUnavailable
+from edge_hardware_service.errors import HardwareUnavailableError
 from edge_hardware_service.hardware.camera.picamera2_device import Picamera2Device
 from edge_hardware_service.models.camera import (
     AutoFocus,
@@ -154,7 +154,7 @@ def test_missing_camera_is_reported_as_unavailable() -> None:
     _assert_pi5_bookworm()
     try:
         device = Picamera2Device(device_index=0)
-    except CameraUnavailable:
+    except HardwareUnavailableError:
         pytest.fail("a Picamera2-compatible camera at index 0 is required")
     try:
         assert device.device_model

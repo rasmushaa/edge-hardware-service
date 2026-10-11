@@ -9,10 +9,7 @@ from dataclasses import dataclass, field
 from threading import RLock
 from typing import Literal, TypeAlias, cast
 
-from edge_hardware_service.hardware.gpio.exceptions import (
-    PinModeConflict,
-    PinNotOpen,
-)
+from edge_hardware_service.errors import ConflictError, NotFoundError
 from edge_hardware_service.hardware.gpio.protocols import (
     DigitalOutputPinDevice,
     GpioDeviceFactory,
@@ -88,7 +85,7 @@ class GpioService:
     """Manage GPIO devices and their active BCM pin assignments.
 
     Pin modes are assigned by the first operation performed on an unopened pin.
-    Later attempts to use the pin in another mode raise `PinModeConflict`.
+    Later attempts to use the pin in another mode raise `ConflictError`.
     Registry lookup, creation, reconfiguration, and release are serialized so a
     pin cannot be opened twice by concurrent requests.
     """
@@ -117,7 +114,7 @@ class GpioService:
             `True` for electrical HIGH or `False` for LOW.
 
         Raises:
-            PinModeConflict: If the pin is open in another mode.
+            ConflictError: If the pin is open in another mode.
         """
         with self._lock:
             handle = self._pins.get(pin)
@@ -147,7 +144,7 @@ class GpioService:
             Snapshot of the digital output after the write.
 
         Raises:
-            PinModeConflict: If the pin is open in another mode.
+            ConflictError: If the pin is open in another mode.
         """
         with self._lock:
             handle = self._pins.get(pin)
@@ -185,7 +182,7 @@ class GpioService:
             Snapshot of the PWM output after the write.
 
         Raises:
-            PinModeConflict: If the pin is open in another mode.
+            ConflictError: If the pin is open in another mode.
             ValueError: If the duty cycle is outside the supported range.
         """
         if not 0.0 <= duty_cycle <= 1.0:
@@ -259,12 +256,15 @@ class GpioService:
             Immutable snapshot of the pin's effective state.
 
         Raises:
-            PinNotOpen: If no device owns the pin.
+            NotFoundError: If no device owns the pin.
         """
         with self._lock:
             handle = self._pins.get(pin)
             if handle is None:
-                raise PinNotOpen(pin)
+                raise NotFoundError(
+                    f"GPIO pin {pin} is not open",
+                    details={"component": "gpio", "pin": pin},
+                )
             return self._snapshot(handle)
 
     def list_pin_statuses(self) -> tuple[PinSnapshot, ...]:
@@ -393,10 +393,21 @@ class GpioService:
             expected: Mode required by the operation.
 
         Raises:
-            PinModeConflict: If the active mode does not match.
+            ConflictError: If the active mode does not match.
         """
         if handle.mode != expected:
-            raise PinModeConflict(handle.pin, handle.mode, expected)
+            raise ConflictError(
+                (
+                    f"GPIO pin {handle.pin} is open as {handle.mode.value}, "
+                    f"not {expected.value}"
+                ),
+                details={
+                    "component": "gpio",
+                    "pin": handle.pin,
+                    "active_mode": handle.mode.value,
+                    "requested_mode": expected.value,
+                },
+            )
 
     @staticmethod
     def _snapshot(handle: PinHandle) -> PinSnapshot:

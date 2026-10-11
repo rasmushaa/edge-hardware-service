@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from edge_hardware_service.api.dependencies import get_camera_service
 from edge_hardware_service.config import Settings
-from edge_hardware_service.hardware.camera.exceptions import CameraAutofocusTimeout
+from edge_hardware_service.errors import OperationTimeoutError
 from edge_hardware_service.hardware.camera.jpeg import jpeg_dimensions
 from edge_hardware_service.hardware.camera.protocols import CameraDevice
 from edge_hardware_service.hardware.camera.simulation_factory import (
@@ -139,7 +139,7 @@ def test_invalid_settings_use_shared_422_envelope(
     response = client.patch("/api/v1/camera/settings", json=payload)
 
     assert response.status_code == 422
-    assert response.json()["code"] == "validation_error"
+    assert response.json()["code"] == "invalid_request"
 
 
 def test_mjpeg_stream_has_one_complete_part_and_no_cache_headers() -> None:
@@ -213,7 +213,11 @@ def test_unsupported_setting_returns_capability_error_atomically(
     status_response = client.get("/api/v1/camera")
 
     assert response.status_code == 422
-    assert response.json()["code"] == "capability_unsupported"
+    assert response.json()["code"] == "invalid_request"
+    assert response.json()["details"] == {
+        "component": "camera",
+        "operation": "validate settings",
+    }
     assert status_response.json()["settings"]["output_resolution"] == {
         "width_px": 1280,
         "height_px": 720,
@@ -249,14 +253,73 @@ def test_openapi_exposes_exactly_six_camera_operations(client: TestClient) -> No
     assert "504" not in patch["responses"]
     autofocus = schema["paths"]["/api/v1/camera/autofocus"]["post"]
     assert set(autofocus["responses"]) >= {"200", "422", "503", "504"}
+    for status_code in ("422", "503", "504"):
+        assert autofocus["responses"][status_code]["content"]["application/json"][
+            "schema"
+        ] == {"$ref": "#/components/schemas/ErrorResponse"}
     examples = patch["requestBody"]["content"]["application/json"]["examples"]
     assert set(examples) == {
         "frame_rate",
+        "provider_defaults",
         "sensor_mode",
         "output_resolution",
         "portrait",
         "manual_focus",
+        "auto_focus_mode",
         "continuous_focus",
+        "provider_managed_focus",
+    }
+
+    status_operation = schema["paths"]["/api/v1/camera"]["get"]
+    capabilities_operation = schema["paths"]["/api/v1/camera/capabilities"]["get"]
+    stream_operation = schema["paths"]["/api/v1/camera/stream"]["get"]
+    image_operation = schema["paths"]["/api/v1/camera/image"]["get"]
+    descriptions = {
+        "status": " ".join(status_operation["description"].split()),
+        "capabilities": " ".join(capabilities_operation["description"].split()),
+        "settings": " ".join(patch["description"].split()),
+        "autofocus": " ".join(autofocus["description"].split()),
+        "stream": " ".join(stream_operation["description"].split()),
+        "image": " ".join(image_operation["description"].split()),
+    }
+    assert "process-wide camera pipeline" in descriptions["status"]
+    assert "does not use a camera-model allowlist" in descriptions["capabilities"]
+    assert "previous settings active" in descriptions["settings"]
+    assert "remains active after the request" in descriptions["autofocus"]
+    assert "not a URL for another camera server" in descriptions["stream"]
+    assert "not a camera still-capture" in descriptions["image"]
+
+    components = schema["components"]["schemas"]
+    for model_name in (
+        "PixelResolution",
+        "CameraSettings",
+        "CameraSettingsPatch",
+        "CameraCapabilities",
+        "CameraStatus",
+        "CameraStreamInfo",
+        "AutofocusResult",
+        "SensorModeCapability",
+        "LensPositionCapability",
+        "OutputCapability",
+        "FocusCapability",
+        "MetadataCapability",
+        "UnmanagedFocus",
+        "ManualFocus",
+        "AutoFocus",
+        "ContinuousFocus",
+    ):
+        assert components[model_name]["description"]
+        assert components[model_name]["examples"]
+        for property_schema in components[model_name].get("properties", {}).values():
+            assert property_schema["description"]
+
+    focus_schema = components["CameraSettingsPatch"]["properties"]["focus"]
+    discriminator = focus_schema["anyOf"][0]["discriminator"]
+    assert set(discriminator["mapping"]) == {
+        "unmanaged",
+        "manual",
+        "auto",
+        "continuous",
     }
 
 
@@ -265,7 +328,10 @@ def test_autofocus_timeout_uses_shared_504_envelope() -> None:
 
     class TimeoutService:
         def autofocus(self) -> None:
-            raise CameraAutofocusTimeout("Autofocus did not complete within 10 seconds")
+            raise OperationTimeoutError(
+                "Autofocus did not complete within 10 seconds",
+                details={"component": "camera", "operation": "autofocus"},
+            )
 
     app.dependency_overrides[get_camera_service] = TimeoutService
     with TestClient(app) as test_client:
@@ -273,9 +339,9 @@ def test_autofocus_timeout_uses_shared_504_envelope() -> None:
 
     assert response.status_code == 504
     assert response.json() == {
-        "code": "camera_timeout",
+        "code": "operation_timeout",
         "message": "Autofocus did not complete within 10 seconds",
-        "details": {"operation": "autofocus"},
+        "details": {"component": "camera", "operation": "autofocus"},
     }
 
 

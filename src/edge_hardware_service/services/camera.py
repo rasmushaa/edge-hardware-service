@@ -7,13 +7,10 @@ from time import monotonic
 
 from pydantic import ValidationError
 
-from edge_hardware_service.hardware.camera.exceptions import (
-    CameraAutofocusTimeout,
-    CameraCapabilityUnsupported,
-    CameraNotReady,
-    CameraOperationError,
-    CameraSettingsInvalid,
-    CameraUnavailable,
+from edge_hardware_service.errors import (
+    HardwareUnavailableError,
+    InvalidRequestError,
+    OperationTimeoutError,
 )
 from edge_hardware_service.hardware.camera.jpeg import (
     jpeg_dimensions,
@@ -195,7 +192,13 @@ class CameraService:
             self._require_streaming()
             capabilities = self._safe_device_attribute("capabilities")
             if not isinstance(capabilities, CameraCapabilities):
-                raise CameraUnavailable("Camera capabilities are unavailable")
+                raise HardwareUnavailableError(
+                    "Camera capabilities are unavailable",
+                    details={
+                        "component": "camera",
+                        "operation": "inspect capabilities",
+                    },
+                )
             return capabilities
 
     def update_settings(self, patch: CameraSettingsPatch) -> CameraSettings:
@@ -209,7 +212,13 @@ class CameraService:
             try:
                 candidate = CameraSettings.model_validate(merged)
             except ValidationError as error:
-                raise CameraSettingsInvalid(str(error)) from error
+                raise InvalidRequestError(
+                    str(error),
+                    details={
+                        "component": "camera",
+                        "operation": "update settings",
+                    },
+                ) from error
             self._device.validate_settings(candidate)
 
             needs_fresh_frame = (
@@ -231,10 +240,14 @@ class CameraService:
                 self._device.reconfigure(candidate)
             except Exception as error:
                 self._restore_previous_settings(current, needs_fresh_frame, error)
-                if isinstance(error, CameraSettingsInvalid):
+                if isinstance(error, InvalidRequestError):
                     raise
-                raise CameraOperationError(
-                    f"Camera settings update failed: {error}"
+                raise HardwareUnavailableError(
+                    f"Camera settings update failed: {error}",
+                    details={
+                        "component": "camera",
+                        "operation": "update settings",
+                    },
                 ) from error
             self._settings = candidate
             if needs_fresh_frame:
@@ -244,8 +257,12 @@ class CameraService:
                     after_sequence=previous_sequence or 0,
                 )
                 if frame is None:
-                    error = CameraNotReady(
-                        "No frame arrived after camera reconfiguration"
+                    error = HardwareUnavailableError(
+                        "No frame arrived after camera reconfiguration",
+                        details={
+                            "component": "camera",
+                            "operation": "update settings",
+                        },
                     )
                     self._restore_previous_settings(current, True, error)
                     raise error
@@ -258,21 +275,35 @@ class CameraService:
         with self._lock:
             self._require_streaming()
             if "auto" not in self.capabilities().focus.modes:
-                raise CameraCapabilityUnsupported(
-                    "the active camera does not support autofocus"
+                raise InvalidRequestError(
+                    "The active camera does not support autofocus",
+                    details={
+                        "component": "camera",
+                        "operation": "autofocus",
+                    },
                 )
             if self._settings.focus.mode != "auto":
                 self.update_settings(CameraSettingsPatch(focus=AutoFocus(mode="auto")))
             try:
                 success = self._device.autofocus(AUTOFOCUS_TIMEOUT_SECONDS)
-            except CameraAutofocusTimeout:
+            except OperationTimeoutError:
                 raise
             except TimeoutError as error:
-                raise CameraAutofocusTimeout(
-                    "Autofocus did not complete within 10 seconds"
+                raise OperationTimeoutError(
+                    "Autofocus did not complete within 10 seconds",
+                    details={
+                        "component": "camera",
+                        "operation": "autofocus",
+                    },
                 ) from error
             except Exception as error:
-                raise CameraOperationError(f"Autofocus failed: {error}") from error
+                raise HardwareUnavailableError(
+                    f"Autofocus failed: {error}",
+                    details={
+                        "component": "camera",
+                        "operation": "autofocus",
+                    },
+                ) from error
             telemetry = self._read_telemetry()
             return AutofocusResult(
                 success=bool(success),
@@ -288,7 +319,13 @@ class CameraService:
         frame = self._frames.wait_for_frame(timeout_seconds)
         if frame is None:
             reason = self._unavailable_reason or "No camera frame is available"
-            raise CameraNotReady(reason)
+            raise HardwareUnavailableError(
+                reason,
+                details={
+                    "component": "camera",
+                    "operation": "wait for frame",
+                },
+            )
         return frame
 
     def close(self) -> None:
@@ -315,7 +352,13 @@ class CameraService:
     def _require_streaming(self) -> None:
         if self._state != "streaming":
             reason = self._unavailable_reason or "Camera is not streaming"
-            raise CameraUnavailable(reason)
+            raise HardwareUnavailableError(
+                reason,
+                details={
+                    "component": "camera",
+                    "operation": "access camera",
+                },
+            )
 
     def _read_telemetry(self):
         try:
@@ -358,7 +401,13 @@ class CameraService:
                 f"Camera settings update and rollback failed: {rollback_error}"
             )
             self._frames.close()
-            raise CameraOperationError(self._unavailable_reason) from error
+            raise HardwareUnavailableError(
+                self._unavailable_reason,
+                details={
+                    "component": "camera",
+                    "operation": "rollback settings",
+                },
+            ) from error
         self._settings = previous
         if needs_fresh_frame:
             previous_sequence = self._frames.clear_latest()
@@ -373,6 +422,12 @@ class CameraService:
                     "Camera rollback completed but produced no frame"
                 )
                 self._frames.close()
-                raise CameraOperationError(self._unavailable_reason) from error
+                raise HardwareUnavailableError(
+                    self._unavailable_reason,
+                    details={
+                        "component": "camera",
+                        "operation": "rollback settings",
+                    },
+                ) from error
         self._state = "streaming"
         self._unavailable_reason = None

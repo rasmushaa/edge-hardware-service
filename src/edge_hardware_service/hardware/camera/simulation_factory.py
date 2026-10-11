@@ -5,9 +5,9 @@ from importlib.resources import files
 from threading import Event, RLock, Thread, current_thread
 from time import monotonic
 
-from edge_hardware_service.hardware.camera.exceptions import (
-    CameraCapabilityUnsupported,
-    CameraOperationError,
+from edge_hardware_service.errors import (
+    HardwareUnavailableError,
+    InvalidRequestError,
 )
 from edge_hardware_service.hardware.camera.jpeg import jpeg_dimensions
 from edge_hardware_service.models.camera import (
@@ -27,7 +27,7 @@ SIMULATION_CLIP_RESOURCE = "assets/camera-simulation.mjpeg"
 
 
 class SimulationCameraDevice:
-    """Loop a 24-frame packaged raw MJPEG clip at the configured frame rate."""
+    """Loop the packaged raw MJPEG clip at the configured frame rate."""
 
     def __init__(self) -> None:
         self._lock = RLock()
@@ -88,15 +88,23 @@ class SimulationCameraDevice:
 
     def validate_settings(self, settings: CameraSettings) -> None:
         if settings.output_resolution != DEFAULT_OUTPUT_RESOLUTION:
-            raise CameraCapabilityUnsupported(
-                "the simulation camera supports 1280x720 output only"
+            raise InvalidRequestError(
+                "The simulation camera supports 1280x720 output only",
+                details={
+                    "component": "camera",
+                    "operation": "validate settings",
+                },
             )
         if (
             settings.sensor_resolution is not None
             and settings.sensor_resolution != DEFAULT_OUTPUT_RESOLUTION
         ):
-            raise CameraCapabilityUnsupported(
-                "the simulation camera advertises sensor resolution 1280x720 only"
+            raise InvalidRequestError(
+                "The simulation camera advertises sensor resolution 1280x720 only",
+                details={
+                    "component": "camera",
+                    "operation": "validate settings",
+                },
             )
 
     def start(
@@ -107,7 +115,10 @@ class SimulationCameraDevice:
         """Load packaged frames and start the single looping producer thread."""
         with self._lock:
             if self._thread is not None:
-                raise CameraOperationError("Simulation camera is already started")
+                raise HardwareUnavailableError(
+                    "Simulation camera is already started",
+                    details={"component": "camera", "operation": "start camera"},
+                )
             self.validate_settings(settings)
             try:
                 raw_clip = (
@@ -117,8 +128,9 @@ class SimulationCameraDevice:
                 )
                 self._frames = _split_mjpeg(raw_clip)
             except (FileNotFoundError, OSError, ValueError) as error:
-                raise CameraOperationError(
-                    f"Could not load packaged simulation MJPEG clip: {error}"
+                raise HardwareUnavailableError(
+                    f"Could not load packaged simulation MJPEG clip: {error}",
+                    details={"component": "camera", "operation": "start camera"},
                 ) from error
             self._settings = settings
             self._publish_frame = publish_frame
@@ -140,7 +152,13 @@ class SimulationCameraDevice:
         """Update the simulated controls without interrupting the frame loop."""
         with self._lock:
             if self._closed or self._thread is None:
-                raise CameraOperationError("Simulation camera is not started")
+                raise HardwareUnavailableError(
+                    "Simulation camera is not started",
+                    details={
+                        "component": "camera",
+                        "operation": "update settings",
+                    },
+                )
             self.validate_settings(settings)
             self._settings = settings
             self._set_focus_telemetry(settings)
@@ -150,9 +168,15 @@ class SimulationCameraDevice:
         del timeout_seconds
         with self._lock:
             if self._closed or self._settings is None:
-                raise CameraOperationError("Simulation camera is not started")
+                raise HardwareUnavailableError(
+                    "Simulation camera is not started",
+                    details={"component": "camera", "operation": "autofocus"},
+                )
             if self._settings.focus.mode != "auto":
-                raise CameraOperationError("One-shot autofocus requires auto mode")
+                raise InvalidRequestError(
+                    "One-shot autofocus requires auto mode",
+                    details={"component": "camera", "operation": "autofocus"},
+                )
             self._telemetry = CameraTelemetry(
                 sensor_temperature_c=25.0,
                 focus_state="focused",
@@ -243,6 +267,6 @@ def _split_mjpeg(clip: bytes) -> tuple[bytes, ...]:
             raise ValueError("simulation JPEG frames must be 1280x720")
         frames.append(jpeg)
         start = end + 2
-    if start != len(clip) or len(frames) != 24:
-        raise ValueError("simulation clip must contain exactly 24 complete JPEGs")
+    if start != len(clip) or not frames:
+        raise ValueError("simulation clip must contain one or more complete JPEGs")
     return tuple(frames)

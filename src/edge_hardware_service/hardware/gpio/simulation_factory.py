@@ -11,10 +11,7 @@ from logging import getLogger
 from threading import Lock
 from typing import TypeVar
 
-from edge_hardware_service.hardware.gpio.exceptions import (
-    PinAlreadyOpen,
-    PinDeviceClosed,
-)
+from edge_hardware_service.errors import ConflictError, HardwareUnavailableError
 from edge_hardware_service.models.gpio import PullMode
 
 logger = getLogger(__name__)
@@ -52,10 +49,17 @@ class _SimulationDevice:
         """Reject access after the device has been closed.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
         """
         if self._closed:
-            raise PinDeviceClosed(self.pin)
+            raise HardwareUnavailableError(
+                f"GPIO device for pin {self.pin} is closed",
+                details={
+                    "component": "gpio",
+                    "pin": self.pin,
+                    "operation": "access device",
+                },
+            )
 
 
 class SimulationInputDevice(_SimulationDevice):
@@ -81,7 +85,7 @@ class SimulationInputDevice(_SimulationDevice):
         """Return the current simulated electrical input level.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
         """
         self._ensure_open()
         logger.info(
@@ -114,7 +118,7 @@ class SimulationDigitalOutputDevice(_SimulationDevice):
         """Return the current simulated output value.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
         """
         self._ensure_open()
         logger.info(
@@ -132,7 +136,7 @@ class SimulationDigitalOutputDevice(_SimulationDevice):
             value: Logical output value.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
         """
         self._ensure_open()
         logger.info(
@@ -173,7 +177,7 @@ class SimulationPwmOutputDevice(_SimulationDevice):
         """Return the simulated duty cycle.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
         """
         self._ensure_open()
         logger.info(
@@ -191,7 +195,7 @@ class SimulationPwmOutputDevice(_SimulationDevice):
             value: Duty cycle from 0.0 to 1.0.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
             ValueError: If the duty cycle is outside the supported range.
         """
         self._ensure_open()
@@ -210,7 +214,7 @@ class SimulationPwmOutputDevice(_SimulationDevice):
         """Return the simulated PWM frequency.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
         """
         self._ensure_open()
         return self._frequency
@@ -223,7 +227,7 @@ class SimulationPwmOutputDevice(_SimulationDevice):
             value: Positive frequency in hertz.
 
         Raises:
-            PinDeviceClosed: If the device is closed.
+            HardwareUnavailableError: If the device is closed.
             ValueError: If the frequency is not positive.
         """
         self._ensure_open()
@@ -267,13 +271,16 @@ class SimulationDeviceFactory:
             The registered device.
 
         Raises:
-            PinAlreadyOpen: If another open device owns the pin.
+            ConflictError: If another open device owns the pin.
         """
         with self._lock:
             existing = self._devices.get(pin)
 
             if existing is not None and not existing.closed:
-                raise PinAlreadyOpen(pin)
+                raise ConflictError(
+                    f"GPIO pin {pin} is already open",
+                    details={"component": "gpio", "pin": pin},
+                )
 
             self._devices[pin] = device
             return device
@@ -293,7 +300,7 @@ class SimulationDeviceFactory:
             A newly opened simulated input device.
 
         Raises:
-            PinAlreadyOpen: If another open device owns the pin.
+            ConflictError: If another open device owns the pin.
         """
         initial_value = pull == PullMode.UP
         logger.info(
@@ -319,7 +326,7 @@ class SimulationDeviceFactory:
             A newly opened simulated digital output device.
 
         Raises:
-            PinAlreadyOpen: If another open device owns the pin.
+            ConflictError: If another open device owns the pin.
         """
         logger.info("Creating simulated digital output for pin %d", pin)
         return self._register(pin, SimulationDigitalOutputDevice(pin))
@@ -339,7 +346,7 @@ class SimulationDeviceFactory:
             A newly opened simulated PWM output device.
 
         Raises:
-            PinAlreadyOpen: If another open device owns the pin.
+            ConflictError: If another open device owns the pin.
         """
         logger.info("Creating simulated PWM output for pin %d", pin)
         return self._register(

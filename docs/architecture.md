@@ -406,18 +406,20 @@ must help an API consumer make a correct call or understand a state transition.
 
 ## Error contract
 
-Expected service failures must not leak as generic `500` responses. Define
-domain exceptions and map them centrally to `ErrorResponse`.
+Expected service failures derive from one `AppError` base and are rendered by
+one API exception handler. FastAPI request validation is adapted to the same
+response contract. Unexpected programming failures remain opaque `500`
+responses.
 
 Recommended mappings:
 
 | Status | Error code | Meaning |
 | --- | --- | --- |
-| `404` | `pin_not_open` | A status operation requires an open pin. |
-| `409` | `pin_mode_conflict` | The requested operation conflicts with the active mode. |
-| `409` | `pin_already_open` | Device construction detected an existing reservation. |
-| `422` | `validation_error` | Request data or path data is invalid. |
+| `404` | `not_found` | A required application resource does not exist. |
+| `409` | `conflict` | The request conflicts with the current resource state. |
+| `422` | `invalid_request` | Input is invalid or a requested capability is unsupported. |
 | `503` | `hardware_unavailable` | The physical provider cannot access the hardware. |
+| `504` | `operation_timeout` | A hardware operation exceeded its deadline. |
 
 An error response contains a stable machine-readable code, a human-readable
 message, and optional structured details such as pin and active mode.
@@ -478,7 +480,7 @@ Use small controlled device/factory fakes to verify:
 - First read opens an input with the correct pull mode.
 - First digital write opens an output and stores the value.
 - First PWM write opens a PWM device and applies duty cycle and frequency.
-- A conflicting operation raises `PinModeConflict` without replacing the
+- A conflicting operation raises `ConflictError` without replacing the
   existing device.
 - Reconfiguration closes the old device exactly once and replaces it.
 - Release closes and removes a pin.

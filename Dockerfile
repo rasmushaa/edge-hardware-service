@@ -60,7 +60,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     EDGE_HARDWARE_SERVICE_BACKEND=simulation
 
 
-FROM system AS container-smoke-test
+FROM system AS container-no-hw-test
 
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
@@ -71,25 +71,18 @@ RUN uv sync --frozen
 CMD ["uv", "run", "pytest"]
 
 
-FROM container-smoke-test AS rpi-hardware-test
+FROM container-no-hw-test AS container-hw-test
 
 ENV EDGE_HARDWARE_SERVICE_BACKEND=rpi
 
 RUN dpkg-query --show \
         python3-gpiozero \
         python3-lgpio \
-        python3-rpi-lgpio
+        python3-rpi-lgpio \
+        python3-libcamera \
+        python3-picamera2
 
-CMD ["python", "-m", "pytest", "-m", "rpi and not camera_rpi", "--verbose", "--showlocals", "-o", "cache_dir=/tmp/pytest-cache"]
-
-
-FROM container-smoke-test AS rpi-camera-hardware-test
-
-ENV EDGE_HARDWARE_SERVICE_BACKEND=rpi
-
-RUN dpkg-query --show python3-libcamera python3-picamera2
-
-CMD ["python", "-m", "pytest", "tests/rpi/test_picamera2_camera_hardware.py", "-m", "rpi and camera_rpi", "--verbose", "--showlocals", "-o", "cache_dir=/tmp/pytest-cache"]
+CMD ["python", "-m", "pytest", "-o", "addopts=--import-mode=importlib", "-m", "rpi", "--verbose", "--showlocals", "-o", "cache_dir=/tmp/pytest-cache"]
 
 
 FROM system AS runtime

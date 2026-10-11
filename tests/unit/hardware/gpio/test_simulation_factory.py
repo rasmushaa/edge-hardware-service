@@ -2,10 +2,7 @@
 
 import pytest
 
-from edge_hardware_service.hardware.gpio.exceptions import (
-    PinAlreadyOpen,
-    PinDeviceClosed,
-)
+from edge_hardware_service.errors import ConflictError, HardwareUnavailableError
 from edge_hardware_service.hardware.gpio.simulation_factory import (
     SimulationDevice,
     SimulationDeviceFactory,
@@ -54,7 +51,7 @@ def test_factory_reserves_open_pins_and_reuses_closed_pins() -> None:
     factory = SimulationDeviceFactory()
     first = factory.create_input(17, PullMode.NONE)
 
-    with pytest.raises(PinAlreadyOpen):
+    with pytest.raises(ConflictError):
         factory.create_digital_output(17)
 
     first.close()
@@ -74,7 +71,7 @@ def test_closed_devices_reject_reads(device: SimulationDevice) -> None:
     """Every simulated device should reject access after closure."""
     device.close()
 
-    with pytest.raises(PinDeviceClosed):
+    with pytest.raises(HardwareUnavailableError):
         _ = device.value
 
 
@@ -85,11 +82,11 @@ def test_closed_output_devices_reject_writes() -> None:
     digital.close()
     pwm.close()
 
-    with pytest.raises(PinDeviceClosed):
+    with pytest.raises(HardwareUnavailableError):
         digital.value = True
-    with pytest.raises(PinDeviceClosed):
+    with pytest.raises(HardwareUnavailableError):
         pwm.value = 0.5
-    with pytest.raises(PinDeviceClosed):
+    with pytest.raises(HardwareUnavailableError):
         pwm.frequency = 500.0
 
 

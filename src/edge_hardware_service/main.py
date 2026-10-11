@@ -8,9 +8,7 @@ from fastapi import FastAPI
 from edge_hardware_service.api.errors import register_exception_handlers
 from edge_hardware_service.api.v1 import router as v1_router
 from edge_hardware_service.config import Settings
-from edge_hardware_service.hardware.gpio.exceptions import (
-    GpioProviderUnavailable,
-)
+from edge_hardware_service.errors import HardwareUnavailableError
 from edge_hardware_service.services.camera import CameraService
 from edge_hardware_service.services.gpio import GpioService
 
@@ -52,7 +50,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if error.name == "gpiozero" or (
                     error.name is not None and error.name.startswith("gpiozero.")
                 ):
-                    raise GpioProviderUnavailable(error.name) from error
+                    raise HardwareUnavailableError(
+                        f"GPIO provider {error.name!r} is unavailable in this runtime",
+                        details={
+                            "component": "gpio",
+                            "provider": error.name,
+                            "operation": "initialize provider",
+                        },
+                    ) from error
                 raise
 
             gpio_factory = GpioZeroDeviceFactory()

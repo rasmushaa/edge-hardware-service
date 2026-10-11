@@ -12,10 +12,7 @@ from typing import Any
 
 import pytest
 
-from edge_hardware_service.hardware.camera.exceptions import (
-    CameraCapabilityUnsupported,
-    CameraOperationError,
-)
+from edge_hardware_service.errors import HardwareUnavailableError, InvalidRequestError
 from edge_hardware_service.hardware.camera.picamera2_device import Picamera2Device
 from edge_hardware_service.models.camera import (
     AutoFocus,
@@ -230,9 +227,9 @@ def test_fixed_focus_and_non_raw_camera_starts_unmanaged(
 
     assert device.capabilities.focus.modes == ("unmanaged",)
     assert device.capabilities.sensor_modes[0].resolution is None
-    with pytest.raises(CameraCapabilityUnsupported, match="focus mode"):
+    with pytest.raises(InvalidRequestError, match="focus mode"):
         device.validate_settings(settings(focus=ContinuousFocus(mode="continuous")))
-    with pytest.raises(CameraCapabilityUnsupported, match="sensor resolution"):
+    with pytest.raises(InvalidRequestError, match="sensor resolution"):
         device.validate_settings(settings(sensor=(640, 480)))
     device.close()
 
@@ -243,7 +240,7 @@ def test_unsupported_settings_do_not_call_provider(fake_provider: FakeCamera) ->
     device.start(settings(), lambda _: None)
     before = (len(fake_provider.configurations), len(fake_provider.controls))
 
-    with pytest.raises(CameraCapabilityUnsupported, match="frame-rate"):
+    with pytest.raises(InvalidRequestError, match="frame-rate"):
         device.reconfigure(settings(fps=10))
 
     assert (len(fake_provider.configurations), len(fake_provider.controls)) == before
@@ -254,7 +251,7 @@ def test_inexact_output_is_rejected_before_configure(fake_provider: FakeCamera) 
     fake_provider.adjust_output_to = (640, 478)
     device = Picamera2Device()
 
-    with pytest.raises(CameraCapabilityUnsupported, match="adjusted"):
+    with pytest.raises(InvalidRequestError, match="adjusted"):
         device.start(settings(output=(640, 480)), lambda _: None)
 
     assert fake_provider.configurations == []
@@ -355,7 +352,7 @@ def test_close_is_idempotent_and_closed_device_rejects_start(
 
     assert fake_provider.stopped == 1
     assert fake_provider.closed == 1
-    with pytest.raises(CameraOperationError, match="closed"):
+    with pytest.raises(HardwareUnavailableError, match="closed"):
         device.start(settings(), lambda _: None)
 
 

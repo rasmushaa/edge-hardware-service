@@ -2,10 +2,7 @@
 
 import pytest
 
-from edge_hardware_service.hardware.gpio.exceptions import (
-    PinModeConflict,
-    PinNotOpen,
-)
+from edge_hardware_service.errors import ConflictError, NotFoundError
 from edge_hardware_service.models.gpio import (
     PinConfigurationRequest,
     PinMode,
@@ -144,12 +141,15 @@ def test_operation_rejects_a_pin_open_in_another_mode(
     """Mode conflicts should report active and requested modes."""
     service.write(17, True)
 
-    with pytest.raises(PinModeConflict) as raised:
+    with pytest.raises(ConflictError) as raised:
         service.read(17)
 
-    assert raised.value.pin == 17
-    assert raised.value.mode == PinMode.OUTPUT
-    assert raised.value.requested_mode == PinMode.INPUT
+    assert raised.value.details == {
+        "component": "gpio",
+        "pin": 17,
+        "active_mode": "output",
+        "requested_mode": "input",
+    }
 
 
 def test_explicit_configuration_closes_and_replaces_existing_device(
@@ -186,7 +186,7 @@ def test_failed_replacement_leaves_pin_released(
         )
 
     assert old_device.closed is True
-    with pytest.raises(PinNotOpen):
+    with pytest.raises(NotFoundError):
         service.get_pin_status(17)
 
 
@@ -224,7 +224,7 @@ def test_close_attempts_every_device_and_retains_failed_handles(
     assert factory.open_devices_at_close == (failed_device,)
     remaining = service.get_pin_status(17)
     assert isinstance(remaining, DigitalOutputPinSnapshot)
-    with pytest.raises(PinNotOpen):
+    with pytest.raises(NotFoundError):
         service.get_pin_status(18)
 
 

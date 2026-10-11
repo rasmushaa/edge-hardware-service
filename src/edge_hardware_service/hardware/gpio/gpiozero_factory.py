@@ -17,11 +17,7 @@ from gpiozero import Device, DigitalOutputDevice, InputDevice, PWMOutputDevice
 from gpiozero.exc import GPIOZeroError
 from gpiozero.pins import Factory
 
-from edge_hardware_service.hardware.gpio.exceptions import (
-    GpioHardwareError,
-    GpioProviderError,
-    GpioProviderUnavailable,
-)
+from edge_hardware_service.errors import HardwareUnavailableError
 from edge_hardware_service.models.gpio import PullMode
 
 ResultT = TypeVar("ResultT")
@@ -60,16 +56,30 @@ def _initialize_default_pin_factory() -> Factory:
         Initialized GPIO Zero provider selected by the OS environment.
 
     Raises:
-        GpioProviderUnavailable: If GPIO Zero cannot select a usable provider.
+        HardwareUnavailableError: If GPIO Zero cannot select a usable provider.
     """
     try:
         Device.ensure_pin_factory()
     except PROVIDER_EXCEPTIONS as error:
-        raise GpioProviderUnavailable("gpiozero pin factory") from error
+        raise HardwareUnavailableError(
+            "GPIO provider 'gpiozero pin factory' is unavailable in this runtime",
+            details={
+                "component": "gpio",
+                "provider": "gpiozero pin factory",
+                "operation": "initialize provider",
+            },
+        ) from error
 
     pin_factory = Device.pin_factory
     if pin_factory is None:
-        raise GpioProviderUnavailable("gpiozero pin factory")
+        raise HardwareUnavailableError(
+            "GPIO provider 'gpiozero pin factory' is unavailable in this runtime",
+            details={
+                "component": "gpio",
+                "provider": "gpiozero pin factory",
+                "operation": "initialize provider",
+            },
+        )
     return pin_factory
 
 
@@ -89,12 +99,19 @@ def _provider_lifecycle_call(
         Value returned by the provider operation.
 
     Raises:
-        GpioProviderError: If the lower-level provider operation fails.
+        HardwareUnavailableError: If the lower-level provider operation fails.
     """
     try:
         return callback()
     except PROVIDER_EXCEPTIONS as error:
-        raise GpioProviderError(provider, operation) from error
+        raise HardwareUnavailableError(
+            f"GPIO provider operation {operation!r} failed for {provider!r}",
+            details={
+                "component": "gpio",
+                "provider": provider,
+                "operation": operation,
+            },
+        ) from error
 
 
 def _provider_call(
@@ -113,12 +130,19 @@ def _provider_call(
         Value returned by the provider operation.
 
     Raises:
-        GpioHardwareError: If gpiozero or its lower-level provider fails.
+        HardwareUnavailableError: If gpiozero or its provider fails.
     """
     try:
         return callback()
     except PROVIDER_EXCEPTIONS as error:
-        raise GpioHardwareError(pin, operation) from error
+        raise HardwareUnavailableError(
+            f"GPIO hardware operation {operation!r} failed for pin {pin}",
+            details={
+                "component": "gpio",
+                "pin": pin,
+                "operation": operation,
+            },
+        ) from error
 
 
 class _GpioZeroInputDevice:
@@ -143,7 +167,7 @@ class _GpioZeroInputDevice:
         input configured with a pull-up resistor.
 
         Raises:
-            GpioHardwareError: If the provider cannot read the pin.
+            HardwareUnavailableError: If the provider cannot read the pin.
         """
         return bool(
             _provider_call(
@@ -157,7 +181,7 @@ class _GpioZeroInputDevice:
         """Close the gpiozero input device.
 
         Raises:
-            GpioHardwareError: If the provider cannot release the pin.
+            HardwareUnavailableError: If the provider cannot release the pin.
         """
         _provider_call(self._pin, "close input", self._device.close)
 
@@ -180,7 +204,7 @@ class _GpioZeroDigitalOutputDevice:
         """Return the current logical output value.
 
         Raises:
-            GpioHardwareError: If the provider cannot read the pin.
+            HardwareUnavailableError: If the provider cannot read the pin.
         """
         return bool(
             _provider_call(
@@ -198,7 +222,7 @@ class _GpioZeroDigitalOutputDevice:
             value: Logical output value.
 
         Raises:
-            GpioHardwareError: If the provider cannot write the pin.
+            HardwareUnavailableError: If the provider cannot write the pin.
         """
         _provider_call(
             self._pin,
@@ -210,7 +234,7 @@ class _GpioZeroDigitalOutputDevice:
         """Close the gpiozero digital output device.
 
         Raises:
-            GpioHardwareError: If the provider cannot release the pin.
+            HardwareUnavailableError: If the provider cannot release the pin.
         """
         _provider_call(
             self._pin,
@@ -237,7 +261,7 @@ class _GpioZeroPwmOutputDevice:
         """Return the current duty cycle.
 
         Raises:
-            GpioHardwareError: If the provider cannot read the pin.
+            HardwareUnavailableError: If the provider cannot read the pin.
         """
         return float(
             _provider_call(
@@ -255,7 +279,7 @@ class _GpioZeroPwmOutputDevice:
             value: Duty cycle from 0.0 to 1.0.
 
         Raises:
-            GpioHardwareError: If the provider cannot write the pin.
+            HardwareUnavailableError: If the provider cannot write the pin.
         """
         _provider_call(
             self._pin,
@@ -268,7 +292,7 @@ class _GpioZeroPwmOutputDevice:
         """Return the current PWM frequency in hertz.
 
         Raises:
-            GpioHardwareError: If the provider cannot read the frequency.
+            HardwareUnavailableError: If the provider cannot read the frequency.
         """
         return float(
             _provider_call(
@@ -286,7 +310,7 @@ class _GpioZeroPwmOutputDevice:
             value: Positive frequency in hertz.
 
         Raises:
-            GpioHardwareError: If the provider cannot update the frequency.
+            HardwareUnavailableError: If the provider cannot update the frequency.
         """
         _provider_call(
             self._pin,
@@ -298,7 +322,7 @@ class _GpioZeroPwmOutputDevice:
         """Close the gpiozero PWM output device.
 
         Raises:
-            GpioHardwareError: If the provider cannot release the pin.
+            HardwareUnavailableError: If the provider cannot release the pin.
         """
         _provider_call(self._pin, "close PWM output", self._device.close)
 
@@ -314,7 +338,7 @@ class GpioZeroDeviceFactory:
                 GPIO Zero performs its normal OS-level selection when omitted.
 
         Raises:
-            GpioProviderUnavailable: If no GPIO Zero provider can initialize.
+            HardwareUnavailableError: If no GPIO Zero provider can initialize.
         """
         self._pin_factory = (
             _initialize_default_pin_factory() if pin_factory is None else pin_factory
@@ -350,12 +374,19 @@ class GpioZeroDeviceFactory:
         """Reject device creation after the shared provider is closed.
 
         Raises:
-            GpioProviderError: If the provider has already been closed.
+            HardwareUnavailableError: If the provider has already been closed.
         """
         if self._closed:
-            raise GpioProviderError(
-                self._provider_name,
-                "create device after close",
+            raise HardwareUnavailableError(
+                (
+                    "GPIO provider operation 'create device after close' failed "
+                    f"for {self._provider_name!r}"
+                ),
+                details={
+                    "component": "gpio",
+                    "provider": self._provider_name,
+                    "operation": "create device after close",
+                },
             )
 
     def create_input(
@@ -374,7 +405,7 @@ class GpioZeroDeviceFactory:
             A newly opened input device adapter.
 
         Raises:
-            GpioHardwareError: If the provider cannot open the pin.
+            HardwareUnavailableError: If the provider cannot open the pin.
         """
         self._ensure_open()
         pull_up = {
@@ -413,7 +444,7 @@ class GpioZeroDeviceFactory:
             A newly opened digital output device adapter.
 
         Raises:
-            GpioHardwareError: If the provider cannot open the pin.
+            HardwareUnavailableError: If the provider cannot open the pin.
         """
         self._ensure_open()
         device = _provider_call(
@@ -441,7 +472,7 @@ class GpioZeroDeviceFactory:
             A newly opened PWM output device adapter.
 
         Raises:
-            GpioHardwareError: If the provider cannot open the pin.
+            HardwareUnavailableError: If the provider cannot open the pin.
         """
         self._ensure_open()
         kwargs = {}
@@ -465,7 +496,7 @@ class GpioZeroDeviceFactory:
         Device adapters must be closed before this method is called.
 
         Raises:
-            GpioProviderError: If the provider cannot release its resources.
+            HardwareUnavailableError: If the provider cannot release its resources.
         """
         if self._closed:
             return

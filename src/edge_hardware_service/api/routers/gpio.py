@@ -6,10 +6,10 @@ from fastapi import APIRouter, Body, Path, Request, status
 
 from edge_hardware_service.api.dependencies import GpioServiceDep
 from edge_hardware_service.api.errors import (
+    CONFLICT_RESPONSE,
     HARDWARE_UNAVAILABLE_RESPONSE,
-    PIN_CONFLICT_RESPONSE,
-    PIN_NOT_OPEN_RESPONSE,
-    VALIDATION_ERROR_RESPONSE,
+    INVALID_REQUEST_RESPONSE,
+    NOT_FOUND_RESPONSE,
 )
 from edge_hardware_service.config import HardwareBackend
 from edge_hardware_service.models.gpio import (
@@ -120,13 +120,13 @@ PwmWriteBody = Annotated[
 ]
 
 COMMON_OPERATION_ERRORS = {
-    status.HTTP_409_CONFLICT: PIN_CONFLICT_RESPONSE,
-    status.HTTP_422_UNPROCESSABLE_CONTENT: VALIDATION_ERROR_RESPONSE,
+    status.HTTP_409_CONFLICT: CONFLICT_RESPONSE,
+    status.HTTP_422_UNPROCESSABLE_CONTENT: INVALID_REQUEST_RESPONSE,
     status.HTTP_503_SERVICE_UNAVAILABLE: HARDWARE_UNAVAILABLE_RESPONSE,
 }
 LOOKUP_ERRORS = {
-    status.HTTP_404_NOT_FOUND: PIN_NOT_OPEN_RESPONSE,
-    status.HTTP_422_UNPROCESSABLE_CONTENT: VALIDATION_ERROR_RESPONSE,
+    status.HTTP_404_NOT_FOUND: NOT_FOUND_RESPONSE,
+    status.HTTP_422_UNPROCESSABLE_CONTENT: INVALID_REQUEST_RESPONSE,
     status.HTTP_503_SERVICE_UNAVAILABLE: HARDWARE_UNAVAILABLE_RESPONSE,
 }
 
@@ -390,7 +390,7 @@ Close and release one BCM GPIO pin owned by this service process.
 """,
     response_model=PinReleaseResponse,
     responses={
-        status.HTTP_422_UNPROCESSABLE_CONTENT: VALIDATION_ERROR_RESPONSE,
+        status.HTTP_422_UNPROCESSABLE_CONTENT: INVALID_REQUEST_RESPONSE,
         status.HTTP_503_SERVICE_UNAVAILABLE: HARDWARE_UNAVAILABLE_RESPONSE,
     },
 )

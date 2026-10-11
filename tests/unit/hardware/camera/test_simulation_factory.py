@@ -33,7 +33,7 @@ def settings(fps: float | None = None) -> CameraSettings:
     )
 
 
-def test_packaged_clip_is_small_distinct_and_exactly_24_hd_jpegs() -> None:
+def test_packaged_clip_contains_all_300_distinct_hd_jpegs() -> None:
     resource = files("edge_hardware_service.hardware.camera").joinpath(
         SIMULATION_CLIP_RESOURCE
     )
@@ -41,13 +41,14 @@ def test_packaged_clip_is_small_distinct_and_exactly_24_hd_jpegs() -> None:
     frames = _split_mjpeg(clip)
 
     assert resource.is_file()
-    assert len(clip) < 1_048_576
-    assert len(frames) == 24
-    assert len(set(frames)) == 24
+    assert clip.startswith(b"\xff\xd8")
+    assert clip.endswith(b"\xff\xd9")
+    assert len(frames) == 300
+    assert len(set(frames)) == 300
     assert all(jpeg_dimensions(frame) == (1280, 720) for frame in frames)
 
 
-def test_simulation_loops_and_paces_the_packaged_clip() -> None:
+def test_simulation_publishes_distinct_frames_at_the_configured_pace() -> None:
     observed: list[bytes] = []
     received = Event()
     device = SimulationCameraDevice()
@@ -65,8 +66,7 @@ def test_simulation_loops_and_paces_the_packaged_clip() -> None:
         device.close()
 
     elapsed = monotonic() - started
-    assert observed[0] == observed[24]
-    assert observed[1] == observed[25]
+    assert len(set(observed[:26])) == 26
     assert elapsed >= 24 / 56 * 0.8
 
 

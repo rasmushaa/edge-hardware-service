@@ -67,11 +67,11 @@ treated as container success.
 
 | Layer | Command | Proves | Does not prove |
 | --- | --- | --- | --- |
-| Portable | `uv run pytest` | Service rules, simulation, schemas, and HTTP behavior | OS packages or physical GPIO |
-| Container smoke | `docker run --rm edge-hardware-service:container-smoke-test` | Portable suite works in the image | Device access |
-| Pi native | `make pi-hardware-test` | Host OS packages, provider selection, and unconnected GPIO access work | Electrical output levels or container packaging |
-| Pi container | `make pi-container-hardware-test` | Image packages and device mapping work on the Pi | Public HTTP workflow |
-| Deployed API | `make pi-api-hardware-test` | Real HTTP endpoints, registry, cleanup, and hardware work together | Electrical timing accuracy |
+| Portable | `make no-hw-test` | Service rules, simulation, schemas, and in-process HTTP behavior | OS packages or physical hardware |
+| Container without hardware | `make no-hw-test-docker` | The non-hardware suite works in the Bookworm test image | Device access or a running Uvicorn service |
+| Pi native | `make hw-test` | Host OS packages, provider selection, GPIO access, and Picamera2 work | Electrical output levels or container packaging |
+| Pi container | `make hw-test-docker` | Test-image packages and device mapping work with real GPIO and camera hardware | Public HTTP workflow or the final runtime image |
+| Deployed API | Not implemented (`HW-05`) | Would prove real HTTP endpoints, registry, cleanup, and hardware together | Electrical timing accuracy |
 
 ## Native Pi test setup
 
@@ -172,7 +172,8 @@ logic on a Raspberry Pi without external components or wiring.
 
 **Acceptance criteria:**
 
-- `make pi-hardware-test` passes without external hardware or `sudo`.
+- `make hw-test` passes without external GPIO components or `sudo`; the camera
+  remains required for the combined suite.
 - The suite verifies internal pull-up HIGH and pull-down LOW on an unconnected
   input.
 - A failure still leaves the digital output LOW, PWM stopped, and all devices
@@ -200,9 +201,9 @@ proved on the host.
 - Keep Raspberry Pi-native packages outside `pyproject.toml` and `uv.lock`.
 - Verify package imports and provider initialization during the appropriate
   ARM64 image stage.
-- Add `make pi-container-hardware-test` to transfer and run the test-stage image
+- Add `make hw-test-docker` to transfer and run the combined test-stage image
   with the same pin inputs and required device access.
-- Keep the portable `container-smoke-test` runnable on non-Pi Docker hosts.
+- Keep `container-no-hw-test` runnable without Raspberry Pi hardware.
 
 **Acceptance criteria:**
 
@@ -221,7 +222,7 @@ Status: planned.
 
 **Work:**
 
-- Add `make pi-api-hardware-test` for use after `make deploy`.
+- Add a Make command for deployed API hardware testing after `make deploy`.
 - Configure an unconnected input with pull-up and pull-down through HTTP and
   verify both responses.
 - Write LOW and HIGH to an unconnected digital output and inspect its status.
@@ -297,7 +298,7 @@ Status: planned.
 **Work:**
 
 - Run the portable pytest suite.
-- Build and run `container-smoke-test` on a normal Docker host.
+- Run `make no-hw-test-docker` on a normal Docker host.
 - Run the native Pi hardware suite with documented unconnected pins.
 - Run the container Pi hardware suite with the same pin selections.
 - Deploy the runtime image and run the API hardware smoke test.

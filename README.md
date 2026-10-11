@@ -4,6 +4,7 @@
 [![status](https://img.shields.io/badge/status-pre--release-orange)](#project-status)
 [![runtime](https://img.shields.io/badge/runtime-Bookworm_ARM64-A22846)](#container-images)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Containerized HTTP adapter for Raspberry Pi GPIO and Picamera2-compatible
 cameras. Applications use a small, versioned API instead of depending directly
@@ -96,24 +97,22 @@ apt repository. uv owns only the portable application dependencies. This keeps
 GPIO Zero, lgpio, `rpi-lgpio`, libcamera, Picamera2, and the compatible NumPy
 build aligned with the operating-system runtime.
 
-The Dockerfile provides four targets:
+The Dockerfile provides three targets:
 
 | Target | Purpose |
 | --- | --- |
 | `runtime` | Default single-worker production service. |
-| `container-smoke-test` | Portable unit and integration tests; safe on macOS/Linux. |
-| `rpi-hardware-test` | Opt-in ARM64 GPIO validation on a physical Raspberry Pi. |
-| `rpi-camera-hardware-test` | Opt-in ARM64 Picamera2 camera validation on a physical Raspberry Pi. |
+| `container-no-hw-test` | Unit and in-process API tests without device access. |
+| `container-hw-test` | Combined GPIO and camera tests on physical Raspberry Pi hardware. |
 
-Run the portable container test with:
+Build and run the non-hardware test image with:
 
 ```shell
-docker build \
-  --target container-smoke-test \
-  --tag edge-hardware-service:container-smoke-test \
-  .
-docker run --rm edge-hardware-service:container-smoke-test
+make no-hw-test-docker
 ```
+
+This test image runs pytest. It does not start Uvicorn, publish an HTTP port, or
+access Raspberry Pi devices.
 
 ## API overview
 
@@ -139,6 +138,21 @@ Broadcom GPIO numbers (BCM), not physical header positions.
 
 Swagger contains the complete request and response schemas, examples for every
 supported value, and documented error responses.
+
+Expected failures share one response envelope containing a stable `code`, a
+human-readable `message`, and optional structured `details`:
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `404` | `not_found` | A required application resource does not exist. |
+| `409` | `conflict` | The request conflicts with the current resource state. |
+| `422` | `invalid_request` | Input is invalid or a requested capability is unsupported. |
+| `503` | `hardware_unavailable` | A camera, GPIO device, or provider cannot complete the operation. |
+| `504` | `operation_timeout` | A hardware operation exceeded its deadline. |
+
+Messages and details identify the component, pin, provider, operation, or
+validation fields involved. Unexpected software failures remain opaque `500`
+responses rather than exposing internal exception text.
 
 Input values are electrical levels: `true` is HIGH and `false` is LOW,
 regardless of pull direction. A no-pull input needs an external pull or driven
@@ -204,12 +218,18 @@ For the repository's ad hoc SSH workflow:
 
 ```shell
 make build
-make deploy PI_HOST=pi@edgepi.local
+make deploy
 ```
 
-The deployment transfers the local ARM64 image, replaces the existing
-`edge-hardware-service` container, and waits for its health check. It is a
-manual development workflow, not a production release mechanism.
+Both commands explain their behavior, and deployment prompts for the Raspberry
+Pi SSH host and confirmation before replacing the existing
+`edge-hardware-service` container. `make build` creates the ARM64 `runtime`
+image, replaces the local `edge-hardware-service-dev` simulation container,
+publishes port 8000, prints the Swagger and ReDoc URLs, and stays attached to
+the terminal until Ctrl+C stops and removes it. `make deploy` transfers that
+image to the Pi and waits for the remote health endpoint. The remote health
+check does not exercise GPIO pins or camera endpoints. This is a manual
+development workflow, not a production release mechanism.
 
 ## Testing on Raspberry Pi hardware
 
@@ -217,45 +237,79 @@ No external components or wiring are required for the current GPIO validation.
 The selected input, digital-output, and PWM pins must be distinct, unconnected,
 and unused by another process or peripheral.
 
-Prepare and test the source directly on the Pi:
+Synchronize the current checkout to the Pi, recreate its native virtual
+environment, and run the combined GPIO and camera hardware suite:
 
 ```shell
-make pi-dev-setup
-make pi-hardware-test
+make hw-test
 ```
 
-Then validate provider parity and the same GPIO behavior inside the ARM64
-container:
+Then run the same GPIO and camera hardware coverage inside the combined ARM64
+test image:
 
 ```shell
-make pi-container-hardware-test
+make hw-test-docker
 ```
 
-Both commands require confirmation before driving pins. The suite verifies
-internal pull-up/down input behavior, digital output state, PWM configuration,
-provider selection, and safe cleanup; it does not measure physical voltage or
-waveform accuracy.
+Each hardware command prompts for the SSH host, three distinct unconnected BCM
+pins, and confirmation that the camera at index 0 is available. `make hw-test`
+also copies the repository with `scripts/sync-repo-to-pi.sh`, deletes and
+recreates the remote `.venv`, removes stale non-excluded files from the remote
+checkout, and verifies Raspberry Pi OS hardware-library imports before testing.
+The GPIO suite verifies internal pull-up/down input
+behavior, digital output state, PWM configuration, provider selection, and safe
+cleanup. The camera suite discovers the active device's modes and focus controls
+and exercises only advertised features. These tests do not measure physical
+voltage or waveform accuracy and do not call the deployed HTTP API.
 
-Validate the connected Picamera2 camera, first natively and then in the ARM64
-container:
+## Development and testing
 
-```shell
-make pi-camera-hardware-test
-make pi-container-camera-hardware-test
-```
-
-The camera suite discovers the active device's modes and focus controls. It
-tests only features the camera advertises and records the provider model; this
-does not imply validation of every Picamera2-compatible camera.
-
-## Development
-
-Python 3.11 and [uv](https://docs.astral.sh/uv/) are required.
+Python 3.11 and [uv](https://docs.astral.sh/uv/) are required. Start with
+`make help`: it lists every supported test command, its required environment,
+the inputs it will request, and whether it accesses hardware. The Makefile is a
+convenience interface for testing; code-quality tools can still be run directly.
 
 ```shell
 uv sync
-uv run pytest
+make no-hw-test
 ```
+
+### Test commands
+
+| Command | What it runs | What a pass proves | What it does not prove |
+| --- | --- | --- | --- |
+| `make no-hw-test` | All pytest tests except those marked `rpi`, using the local uv environment. This covers unit tests, simulation adapters, service policy, error contracts, and in-process FastAPI requests. | Portable application behavior works on the current development machine. | Raspberry Pi OS packages, the container image, Uvicorn as a running service, GPIO electrical behavior, or a physical camera. |
+| `make no-hw-test-docker` | Builds the ARM64 Bookworm `container-no-hw-test` image and runs the non-hardware pytest selection inside it. | The test image builds and the software suite works with its packaged Python and Raspberry Pi OS dependencies. | Device access, a running HTTP server, the production `runtime` image, or physical GPIO/camera behavior. |
+| `make hw-test` | Prompts for a Pi SSH host and three safe BCM pins, mirrors the checkout, recreates the remote `.venv`, then runs only the native GPIO and camera tests marked `rpi`. | The native Raspberry Pi OS providers can access the selected real GPIO pins and camera features exercised by the suite. | Container access, the deployed runtime HTTP API, voltage levels, PWM waveform accuracy, or unadvertised camera capabilities. |
+| `make hw-test-docker` | Builds the ARM64 `container-hw-test` image, transfers it to the Pi, checks native/container GPIO-provider parity, and runs the marked GPIO and camera tests with privileged device access. | The hardware test image can access the validated GPIO and camera hardware using the expected provider. | The production `runtime` image, deployed HTTP endpoints, voltage levels, PWM waveform accuracy, or other Pi/camera combinations. |
+
+`make build` and `make deploy` are not test suites. `make build` runs the
+production-shaped image locally with the simulation backend on port 8000;
+`make deploy` starts it remotely with the Raspberry Pi backend and checks its
+health endpoint. Neither command proves that physical GPIO or camera endpoints
+work.
+
+### CI and manual hardware validation
+
+GitHub-hosted Actions coverage is intentionally limited to the no-hardware
+tests. A green GitHub Actions run demonstrates the portable software behavior;
+it does not demonstrate that GPIO, Picamera2, device permissions, or provider
+selection work on a Raspberry Pi.
+
+Both hardware targets require deliberate, manual validation on a physical
+Raspberry Pi. Run them before recording a Pi, camera, or OS combination as
+validated. They prompt for the target and pins rather than reading hidden
+environment files, and the deployed service container must be stopped so it
+does not already own the devices.
+
+The Docker hardware test is relatively slow. `make hw-test-docker` builds an
+ARM64 image, exports the complete image, compresses it, copies it to the Pi over
+SSH, and loads it into the Pi Docker daemon before tests begin. Building ARM64
+on a non-ARM development machine may also use emulation. The transfer can take
+several minutes, especially over Wi-Fi; this is expected and is substantially
+heavier than syncing the source tree for `make hw-test`.
+
+### Optional local code-quality checks
 
 Install the repository's fast commit hooks once per clone:
 
@@ -263,27 +317,17 @@ Install the repository's fast commit hooks once per clone:
 uv run pre-commit install
 ```
 
-Run the same checks against the complete repository at any time:
+Run formatting and lint checks directly when needed:
 
 ```shell
-make lint
-make pre-commit
+uv run ruff check .
+uv run ruff format --check .
+uv run pre-commit run --all-files
 ```
 
 Pre-commit checks basic file hygiene, YAML/TOML validity, Python lint rules,
 import ordering, and Ruff formatting. Raspberry Pi tests remain opt-in and are
 not run by commit hooks.
-
-### Validation matrix
-
-| Command | Environment | What it proves |
-| --- | --- | --- |
-| `uv run pytest` | macOS/Linux/Pi | Portable service, simulation, and HTTP behavior. |
-| `docker run --rm edge-hardware-service:container-smoke-test` | Docker | Portable tests execute in the packaged test image. |
-| `make pi-hardware-test` | Raspberry Pi OS | Native OS packages, provider selection, and GPIO access. |
-| `make pi-container-hardware-test` | Raspberry Pi + Docker | Native/container provider parity and GPIO access from the ARM64 image. |
-| `make pi-camera-hardware-test` | Raspberry Pi OS | Native Picamera2 discovery, streaming, optional controls, and cleanup. |
-| `make pi-container-camera-hardware-test` | Raspberry Pi + Docker | The same camera behavior from the ARM64 image. |
 
 ### Raspberry Pi troubleshooting
 
@@ -327,6 +371,4 @@ current pre-release workflow.
 
 ## Documentation
 
-The repository does not yet include a public license. Add an explicit license
-before the first public release so users know how they may use and redistribute
-the software.
+This project is licensed under the permissive [MIT License](LICENSE).

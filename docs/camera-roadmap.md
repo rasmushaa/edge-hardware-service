@@ -9,7 +9,7 @@ allowlist and does not claim that every Picamera2 device has been physically
 validated.
 
 The service always exposes one camera contract. Optional settings are rejected
-atomically with `capability_unsupported` when the active device does not
+atomically with `invalid_request` when the active device does not
 advertise them. Missing metadata remains present as `null` in camera status.
 
 ## Runtime discovery
@@ -77,7 +77,7 @@ when their controls are advertised:
 - `auto` requires automatic `AfMode` plus `AfTrigger`;
 - `continuous` requires continuous `AfMode`.
 
-Calling autofocus on a fixed-focus camera returns `capability_unsupported`
+Calling autofocus on a fixed-focus camera returns `invalid_request`
 without changing settings. Autofocus-capable cameras retain the ten-second
 operation deadline and metadata-driven completion.
 
@@ -105,11 +105,13 @@ rollback, exact output dimensions, and simulation behavior.
 Physical validation remains opt-in:
 
 ```shell
-make pi-camera-hardware-test
-make pi-container-camera-hardware-test
+make hw-test
+make hw-test-docker
 ```
 
-The tests run on Raspberry Pi 5 Bookworm, discover the connected camera, stream
-1280x720 MJPEG, exercise only advertised sensor/focus capabilities, verify API
-broker behavior, and release the device. Documentation must list actual validated
-models rather than treating generic discovery as proof of universal compatibility.
+These combined native and container hardware commands also test GPIO. Their
+camera cases run on Raspberry Pi 5 Bookworm, discover the connected camera,
+stream 1280x720 MJPEG, exercise only advertised sensor/focus capabilities,
+verify broker behavior, and release the device. They do not start the deployed
+HTTP API. Documentation must list actual validated models rather than treating
+generic discovery as proof of universal compatibility.

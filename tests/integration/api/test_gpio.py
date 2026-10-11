@@ -29,9 +29,9 @@ def test_complete_gpio_workflow(client: TestClient) -> None:
     missing = client.get("/api/v1/gpio/17")
     assert missing.status_code == 404
     assert missing.json() == {
-        "code": "pin_not_open",
+        "code": "not_found",
         "message": "GPIO pin 17 is not open",
-        "details": {"pin": 17},
+        "details": {"component": "gpio", "pin": 17},
     }
 
     digital = client.put("/api/v1/gpio/17/value", json={"value": True})
@@ -46,7 +46,9 @@ def test_complete_gpio_workflow(client: TestClient) -> None:
 
     conflict = client.get("/api/v1/gpio/17/value")
     assert conflict.status_code == 409
+    assert conflict.json()["code"] == "conflict"
     assert conflict.json()["details"] == {
+        "component": "gpio",
         "pin": 17,
         "active_mode": "output",
         "requested_mode": "input",
@@ -135,7 +137,7 @@ def test_validation_errors_use_the_public_error_schema(
 
     assert response.status_code == 422
     body = response.json()
-    assert body["code"] == "validation_error"
+    assert body["code"] == "invalid_request"
     assert body["message"] == "Request validation failed"
     assert body["details"]["errors"][0]["field"] == field
 
@@ -171,6 +173,11 @@ def test_openapi_exposes_all_gpio_operations_and_named_examples(
         "pwm_with_provider_frequency",
         "pwm_with_custom_frequency",
     }
+    lookup_responses = schema["paths"]["/api/v1/gpio/{pin}"]["get"]["responses"]
+    for status_code in ("404", "422", "503"):
+        assert lookup_responses[status_code]["content"]["application/json"][
+            "schema"
+        ] == {"$ref": "#/components/schemas/ErrorResponse"}
 
 
 def test_health_endpoint_uses_the_versioned_prefix(client: TestClient) -> None:

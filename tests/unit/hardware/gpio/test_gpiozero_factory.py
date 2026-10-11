@@ -19,13 +19,9 @@ from gpiozero.pins import Factory  # noqa: E402
 from gpiozero.pins.mock import MockFactory, MockPWMPin  # noqa: E402
 
 from edge_hardware_service.config import Settings  # noqa: E402
+from edge_hardware_service.errors import HardwareUnavailableError  # noqa: E402
 from edge_hardware_service.hardware.gpio import (  # noqa: E402
     gpiozero_factory as gpiozero_backend,
-)
-from edge_hardware_service.hardware.gpio.exceptions import (  # noqa: E402
-    GpioHardwareError,
-    GpioProviderError,
-    GpioProviderUnavailable,
 )
 from edge_hardware_service.main import create_app  # noqa: E402
 from edge_hardware_service.models.gpio import PullMode  # noqa: E402
@@ -137,12 +133,16 @@ def test_provider_initialization_failure_uses_domain_error(
         classmethod(fail_initialization),
     )
     try:
-        with pytest.raises(GpioProviderUnavailable) as raised:
+        with pytest.raises(HardwareUnavailableError) as raised:
             GpioZeroDeviceFactory()
     finally:
         Device.pin_factory = previous
 
-    assert raised.value.provider == "gpiozero pin factory"
+    assert raised.value.details == {
+        "component": "gpio",
+        "provider": "gpiozero pin factory",
+        "operation": "initialize provider",
+    }
     assert isinstance(raised.value.__cause__, RuntimeError)
 
 
@@ -164,11 +164,14 @@ def test_device_operation_failure_uses_pin_scoped_domain_error(
         fail_construction,
     )
 
-    with pytest.raises(GpioHardwareError) as raised:
+    with pytest.raises(HardwareUnavailableError) as raised:
         factory.create_digital_output(17)
 
-    assert raised.value.pin == 17
-    assert raised.value.operation == "open digital output"
+    assert raised.value.details == {
+        "component": "gpio",
+        "pin": 17,
+        "operation": "open digital output",
+    }
     assert isinstance(raised.value.__cause__, RuntimeError)
     factory.close()
 
@@ -191,11 +194,14 @@ def test_provider_close_failure_is_translated_and_not_retried() -> None:
     pin_factory = FailingCloseFactory()
     factory = GpioZeroDeviceFactory(cast(Factory, pin_factory))
 
-    with pytest.raises(GpioProviderError) as raised:
+    with pytest.raises(HardwareUnavailableError) as raised:
         factory.close()
     factory.close()
 
-    assert raised.value.operation == "close"
+    assert raised.value.details is not None
+    assert raised.value.details["component"] == "gpio"
+    assert str(raised.value.details["provider"]).endswith("FailingCloseFactory")
+    assert raised.value.details["operation"] == "close"
     assert isinstance(raised.value.__cause__, RuntimeError)
     assert pin_factory.close_calls == 1
 

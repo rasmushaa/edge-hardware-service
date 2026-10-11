@@ -10,11 +10,10 @@ from threading import Condition, RLock
 from time import monotonic
 from typing import Any
 
-from edge_hardware_service.hardware.camera.exceptions import (
-    CameraAutofocusTimeout,
-    CameraCapabilityUnsupported,
-    CameraOperationError,
-    CameraUnavailable,
+from edge_hardware_service.errors import (
+    HardwareUnavailableError,
+    InvalidRequestError,
+    OperationTimeoutError,
 )
 from edge_hardware_service.models.camera import (
     DEFAULT_OUTPUT_RESOLUTION,
@@ -34,9 +33,27 @@ logger = getLogger(__name__)
 
 DEFAULT_FOCUS_TIMEOUT_SECONDS = 10.0
 
-# Legacy adapter-local names retained as aliases for direct provider callers.
-CameraDeviceUnavailable = CameraUnavailable
-CameraDeviceError = CameraOperationError
+
+def _camera_hardware_error(
+    message: str,
+    operation: str,
+) -> HardwareUnavailableError:
+    """Build a camera provider failure with consistent structured context."""
+    return HardwareUnavailableError(
+        message,
+        details={"component": "camera", "operation": operation},
+    )
+
+
+def _camera_invalid_request(
+    message: str,
+    operation: str = "validate settings",
+) -> InvalidRequestError:
+    """Build a rejected camera request with consistent structured context."""
+    return InvalidRequestError(
+        message,
+        details={"component": "camera", "operation": operation},
+    )
 
 
 class _JpegOutput(BufferedIOBase):
@@ -70,7 +87,10 @@ class Picamera2Device:
             from picamera2.encoders import MJPEGEncoder
             from picamera2.outputs import FileOutput
         except (ImportError, OSError) as error:
-            raise CameraUnavailable("Picamera2/libcamera is unavailable") from error
+            raise _camera_hardware_error(
+                "Picamera2/libcamera is unavailable",
+                "initialize camera",
+            ) from error
 
         self._controls = controls
         self._encoder_type = MJPEGEncoder
@@ -93,8 +113,9 @@ class Picamera2Device:
         try:
             camera = Picamera2(camera_num=device_index)
         except Exception as error:
-            raise CameraUnavailable(
-                self._initialization_error("open", device_index, error)
+            raise _camera_hardware_error(
+                self._initialization_error("open", device_index, error),
+                "initialize camera",
             ) from error
 
         self._camera = camera
@@ -134,12 +155,13 @@ class Picamera2Device:
                 try:
                     camera = Picamera2(camera_num=device_index)
                 except Exception as reopen_error:
-                    raise CameraUnavailable(
+                    raise _camera_hardware_error(
                         self._initialization_error(
                             "reopen after failed sensor mode discovery for",
                             device_index,
                             reopen_error,
-                        )
+                        ),
+                        "initialize camera",
                     ) from reopen_error
                 self._camera = camera
                 self._device_model = self._get_device_model(camera)
@@ -155,10 +177,11 @@ class Picamera2Device:
                     active_camera.close()
                 except Exception:
                     pass
-            raise CameraUnavailable(
+            raise _camera_hardware_error(
                 self._initialization_error(
                     "discover capabilities for", device_index, error
-                )
+                ),
+                "discover capabilities",
             ) from error
 
     @property
@@ -206,7 +229,10 @@ class Picamera2Device:
     ) -> None:
         with self._lock:
             if self._closed:
-                raise CameraDeviceError("camera has been closed")
+                raise _camera_hardware_error(
+                    "Camera has been closed",
+                    "start camera",
+                )
             if self._running:
                 return
             self.validate_settings(settings)
@@ -216,24 +242,24 @@ class Picamera2Device:
     def validate_settings(self, settings: CameraSettings) -> None:
         """Reject unsupported settings without touching the camera."""
         if settings.fps is not None and not self._capabilities.frame_rate_control:
-            raise CameraCapabilityUnsupported(
-                "the active camera does not support frame-rate control"
+            raise _camera_invalid_request(
+                "The active camera does not support frame-rate control"
             )
 
         focus_mode = settings.focus.mode
         if focus_mode not in self._capabilities.focus.modes:
-            raise CameraCapabilityUnsupported(
-                f"the active camera does not support focus mode {focus_mode!r}"
+            raise _camera_invalid_request(
+                f"The active camera does not support focus mode {focus_mode!r}"
             )
         if focus_mode == "manual":
             lens = self._capabilities.focus.lens_position_diopters
             if lens is None:
-                raise CameraCapabilityUnsupported(
-                    "the active camera does not support manual lens positioning"
+                raise _camera_invalid_request(
+                    "The active camera does not support manual lens positioning"
                 )
             position = settings.focus.lens_position_diopters
             if not lens.minimum <= position <= lens.maximum:
-                raise CameraCapabilityUnsupported(
+                raise _camera_invalid_request(
                     "lens_position_diopters must be within the camera's "
                     f"advertised range [{lens.minimum}, {lens.maximum}]"
                 )
@@ -244,7 +270,10 @@ class Picamera2Device:
         """Apply settings live when safe, otherwise restart the pipeline."""
         with self._lock:
             if self._closed or self._camera is None:
-                raise CameraDeviceError("camera is not open")
+                raise _camera_hardware_error(
+                    "Camera is not open",
+                    "update settings",
+                )
             self.validate_settings(settings)
             if not self._running or self._settings is None:
                 self._configure_and_start(settings)
@@ -268,7 +297,7 @@ class Picamera2Device:
             self._stop_recording()
             try:
                 self._configure_and_start(settings)
-            except CameraCapabilityUnsupported:
+            except InvalidRequestError:
                 raise
             except Exception as error:
                 raise self._translate_error("reconfigure camera", error) from error
@@ -284,8 +313,9 @@ class Picamera2Device:
         with self._metadata_condition:
             self._ensure_running()
             if "auto" not in self._capabilities.focus.modes:
-                raise CameraCapabilityUnsupported(
-                    "the active camera does not support autofocus"
+                raise _camera_invalid_request(
+                    "The active camera does not support autofocus",
+                    "autofocus",
                 )
             if timeout_seconds <= 0:
                 raise ValueError("timeout_seconds must be positive")
@@ -323,8 +353,12 @@ class Picamera2Device:
                             "latest_focus_succeeded": False,
                         }
                     )
-                    raise CameraAutofocusTimeout(
-                        "camera autofocus did not finish in time"
+                    raise OperationTimeoutError(
+                        "Camera autofocus did not finish in time",
+                        details={
+                            "component": "camera",
+                            "operation": "autofocus",
+                        },
                     )
                 self._metadata_condition.wait(remaining)
             return self._telemetry.latest_focus_succeeded is True
@@ -353,7 +387,7 @@ class Picamera2Device:
     def _configure_and_start(self, settings: CameraSettings) -> None:
         camera = self._camera
         if camera is None:
-            raise CameraDeviceError("camera is not open")
+            raise _camera_hardware_error("Camera is not open", "start camera stream")
         selected_mode = self._select_sensor_mode(settings)
         output_size = self._resolution_tuple(settings.output_resolution)
         kwargs: dict[str, Any] = {
@@ -388,7 +422,7 @@ class Picamera2Device:
             )
             self._settings = settings
             self._running = True
-        except CameraCapabilityUnsupported:
+        except InvalidRequestError:
             self._running = False
             raise
         except Exception as error:
@@ -503,8 +537,8 @@ class Picamera2Device:
             suffix = ""
             if settings.fps is not None:
                 suffix = f" at {settings.fps:g} FPS"
-            raise CameraCapabilityUnsupported(
-                f"the active camera does not advertise sensor resolution "
+            raise _camera_invalid_request(
+                f"The active camera does not advertise sensor resolution "
                 f"{size[0]}x{size[1]}{suffix}"
             )
 
@@ -535,7 +569,7 @@ class Picamera2Device:
     def _apply_live_controls(self, settings: CameraSettings) -> None:
         camera = self._camera
         if camera is None:
-            raise CameraDeviceError("camera is not open")
+            raise _camera_hardware_error("Camera is not open", "apply controls")
         controls = self._controls_for(settings)
         if not controls:
             return
@@ -551,8 +585,8 @@ class Picamera2Device:
         except (KeyError, TypeError, AttributeError):
             return
         if actual != requested:
-            raise CameraCapabilityUnsupported(
-                f"requested output resolution {requested[0]}x{requested[1]} "
+            raise _camera_invalid_request(
+                f"Requested output resolution {requested[0]}x{requested[1]} "
                 f"was adjusted to {actual[0]}x{actual[1]}"
             )
 
@@ -675,9 +709,12 @@ class Picamera2Device:
 
     def _ensure_running(self) -> None:
         if self._closed:
-            raise CameraDeviceError("camera has been closed")
+            raise _camera_hardware_error("Camera has been closed", "access camera")
         if not self._running or self._camera is None:
-            raise CameraDeviceError("camera stream is not running")
+            raise _camera_hardware_error(
+                "Camera stream is not running",
+                "access camera",
+            )
 
     @staticmethod
     def _resolution_tuple(resolution: PixelResolution) -> tuple[int, int]:
@@ -698,7 +735,13 @@ class Picamera2Device:
         )
 
     @staticmethod
-    def _translate_error(operation: str, error: Exception) -> CameraOperationError:
-        if isinstance(error, CameraOperationError):
+    def _translate_error(
+        operation: str,
+        error: Exception,
+    ) -> HardwareUnavailableError:
+        if isinstance(error, HardwareUnavailableError):
             return error
-        return CameraOperationError(f"camera operation {operation!r} failed: {error}")
+        return _camera_hardware_error(
+            f"Camera operation {operation!r} failed: {error}",
+            operation,
+        )
