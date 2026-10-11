@@ -75,7 +75,7 @@ wheels = [
 
 [[package]]
 name = "edge-hardware-service"
-version = "0.1.0"
+version = "0.1.1rc1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
