@@ -23,10 +23,17 @@ from edge_hardware_service.models.camera import (
 )
 
 
-def settings(fps: float | None = None) -> CameraSettings:
+def settings(
+    fps: float | None = None,
+    sensor: tuple[int, int] | None = None,
+) -> CameraSettings:
     return CameraSettings(
         fps=fps,
-        sensor_resolution=None,
+        sensor_resolution=(
+            None
+            if sensor is None
+            else PixelResolution(width_px=sensor[0], height_px=sensor[1])
+        ),
         output_resolution=PixelResolution(width_px=1280, height_px=720),
         rotation_degrees=0,
         focus=UnmanagedFocus(mode="unmanaged"),
@@ -87,6 +94,21 @@ def test_simulation_telemetry_and_focus_are_deterministic() -> None:
         assert device.telemetry.sensor_temperature_c == 25.0
         assert device.telemetry.focus_state == "focused"
         assert device.telemetry.latest_focus_succeeded is True
+    finally:
+        device.close()
+
+
+def test_simulation_accepts_sensor_hint_and_reports_its_applied_mode() -> None:
+    device = SimulationCameraDevice()
+    requested = settings(sensor=(2000, 1100))
+
+    device.start(requested, lambda frame: None)
+    try:
+        assert device.stream_info is not None
+        assert device.stream_info.sensor_resolution == PixelResolution(
+            width_px=1280,
+            height_px=720,
+        )
     finally:
         device.close()
 

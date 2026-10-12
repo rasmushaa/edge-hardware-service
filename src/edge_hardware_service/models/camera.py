@@ -133,8 +133,9 @@ class CameraSettings(_ResponseModel):
     sensor_resolution: PixelResolution | None = Field(
         default=None,
         description=(
-            "Requested raw sensor mode. Null lets Picamera2 select a mode; a "
-            "non-null value must be advertised by camera capabilities."
+            "Preferred raw sensor dimensions. Picamera2/libcamera selects the "
+            "best available mode, which may differ from this hint. Null leaves "
+            "selection entirely to the provider."
         ),
     )
     output_resolution: PixelResolution = Field(
@@ -201,8 +202,9 @@ class CameraSettingsPatch(_RequestModel):
     sensor_resolution: PixelResolution | None = Field(
         default=None,
         description=(
-            "Advertised raw sensor resolution. Explicit null restores provider "
-            "selection; omission preserves the current value."
+            "Preferred raw sensor dimensions used as a best-match hint. Explicit "
+            "null restores provider selection; omission preserves the current "
+            "hint."
         ),
     )
     output_resolution: PixelResolution | None = Field(
@@ -528,9 +530,10 @@ class CameraCapabilities(_ResponseModel):
     sensor_modes: tuple[SensorModeCapability, ...] = Field(
         default=(),
         description=(
-            "Raw modes discovered from Picamera2. The list may be empty when "
-            "mode enumeration was unavailable; null sensor_resolution still "
-            "allows provider selection."
+            "Raw modes known without invasive provider enumeration. The physical "
+            "adapter leaves this list empty because Picamera2 mode enumeration "
+            "temporarily configures every mode and can exhaust DMA memory. This "
+            "list is informational and is not an allowlist for sensor hints."
         ),
     )
     output: OutputCapability = Field(
@@ -560,14 +563,7 @@ class CameraCapabilities(_ResponseModel):
                     "device_index": 0,
                     "device_model": "imx708",
                     "discovery_warnings": [],
-                    "sensor_modes": [
-                        {
-                            "resolution": {"width_px": 2304, "height_px": 1296},
-                            "format": "SRGGB10_CSI2P",
-                            "bit_depth": 10,
-                            "max_fps": 56.0,
-                        }
-                    ],
+                    "sensor_modes": [],
                     "output": {
                         "default_resolution": {
                             "width_px": 1280,

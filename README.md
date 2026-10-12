@@ -14,9 +14,9 @@ simulation backends on macOS, Linux, and CI.
 > [!IMPORTANT]
 > This project is in pre-release development. GPIO API v1 and the Bookworm
 > ARM64 image are functional, but no GHCR image or compatibility guarantee has
-> been published yet. Camera support discovers Picamera2 sensor modes and
-> controls at runtime; only hardware explicitly named in the validation notes
-> should be treated as physically validated.
+> been published yet. Camera support discovers Picamera2 controls at runtime
+> and delegates sensor-mode selection to libcamera; only hardware explicitly
+> named in the validation notes should be treated as physically validated.
 
 ## Quick start
 
@@ -123,7 +123,7 @@ Broadcom GPIO numbers (BCM), not physical header positions.
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | Check process readiness. |
 | `GET` | `/api/v1/camera` | Inspect camera state, effective stream, settings, and telemetry. |
-| `GET` | `/api/v1/camera/capabilities` | Inspect runtime-discovered sensor modes and controls. |
+| `GET` | `/api/v1/camera/capabilities` | Inspect runtime-discovered controls and output constraints. |
 | `PATCH` | `/api/v1/camera/settings` | Atomically update supported camera settings. |
 | `POST` | `/api/v1/camera/autofocus` | Run one-shot autofocus when advertised. |
 | `GET` | `/api/v1/camera/stream` | Consume the shared MJPEG stream. |
@@ -258,8 +258,8 @@ recreates the remote `.venv`, removes stale non-excluded files from the remote
 checkout, and verifies Raspberry Pi OS hardware-library imports before testing.
 The GPIO suite verifies internal pull-up/down input
 behavior, digital output state, PWM configuration, provider selection, and safe
-cleanup. The camera suite discovers the active device's modes and focus controls
-and exercises only advertised features. These tests do not measure physical
+cleanup. The camera suite verifies provider-selected sensor configuration and
+exercises only advertised controls. These tests do not measure physical
 voltage or waveform accuracy and do not call the deployed HTTP API.
 
 ## Development and testing

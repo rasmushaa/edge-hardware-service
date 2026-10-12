@@ -99,7 +99,7 @@ def test_partial_settings_and_autofocus_keep_one_effective_configuration(
         "/api/v1/camera/settings",
         json={
             "fps": 14,
-            "sensor_resolution": {"width_px": 1280, "height_px": 720},
+            "sensor_resolution": {"width_px": 2000, "height_px": 1100},
         },
     )
     autofocus = client.post("/api/v1/camera/autofocus")
@@ -108,6 +108,10 @@ def test_partial_settings_and_autofocus_keep_one_effective_configuration(
     assert settings.status_code == 200
     assert settings.json()["settings"]["fps"] == 14.0
     assert settings.json()["settings"]["sensor_resolution"] == {
+        "width_px": 2000,
+        "height_px": 1100,
+    }
+    assert settings.json()["stream"]["sensor_resolution"] == {
         "width_px": 1280,
         "height_px": 720,
     }
@@ -261,7 +265,7 @@ def test_openapi_exposes_exactly_six_camera_operations(client: TestClient) -> No
     assert set(examples) == {
         "frame_rate",
         "provider_defaults",
-        "sensor_mode",
+        "sensor_hint",
         "output_resolution",
         "portrait",
         "manual_focus",

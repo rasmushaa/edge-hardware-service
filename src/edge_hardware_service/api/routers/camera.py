@@ -47,10 +47,11 @@ CameraSettingsBody = Annotated[
                 "description": ("Null is accepted only for fps and sensor_resolution."),
                 "value": {"fps": None, "sensor_resolution": None},
             },
-            "sensor_mode": {
-                "summary": "Select an advertised sensor resolution",
+            "sensor_hint": {
+                "summary": "Prefer a sensor resolution",
                 "description": (
-                    "Choose a resolution from GET /api/v1/camera/capabilities."
+                    "Picamera2 selects the best available sensor mode; inspect "
+                    "camera status to see the applied sensor resolution."
                 ),
                 "value": {
                     "sensor_resolution": {
@@ -197,23 +198,24 @@ Discover what the active camera and provider support at runtime.
 
 The service does not use a camera-model allowlist. It inspects Picamera2 when
 the camera starts and exposes the resulting contract here. Clients should read
-this endpoint instead of assuming that every camera supports the same sensor
-modes, frame-rate control, focus controls, lens range, or metadata.
+this endpoint instead of assuming that every camera supports the same
+frame-rate control, focus controls, lens range, or metadata.
 
 ### Using capabilities
 
-- Choose `sensor_resolution` from `sensor_modes`. A mode may also advertise its
-  pixel format, bit depth, and maximum FPS.
-- Set `fps` only when `frame_rate_control` is `true` and keep it within the
-  selected sensor mode's `max_fps` when one is reported.
+- `sensor_resolution` is a best-match hint. Picamera2/libcamera chooses the
+  applied sensor mode, which is reported by `GET /api/v1/camera` under
+  `stream.sensor_resolution` when available.
+- Set `fps` only when `frame_rate_control` is `true`.
 - `output` describes the service's encoded MJPEG contract. Output dimensions
   must be positive, even, and applied exactly.
 - Choose a focus request only from `focus.modes`. When `manual` is present, use
   the advertised `lens_position_diopters` range.
 - `observed_metadata` tells clients which optional telemetry fields the provider
   has actually published.
-- `discovery_warnings` reports non-fatal discovery problems. `sensor_modes` may
-  be empty when Picamera2 must select a provider-managed mode.
+- `sensor_modes` is informational and may be empty. The physical adapter avoids
+  Picamera2's invasive exhaustive enumeration because it can exhaust DMA memory;
+  an empty list does not prevent sensor-resolution hints.
 
 Capabilities describe this running camera instance and may differ after
 hardware, driver, or operating-system changes.
@@ -242,7 +244,7 @@ clients never receive a successful partially applied configuration.
 | Field | Accepted value | Meaning |
 | --- | --- | --- |
 | `fps` | Positive number or `null` | Target frames per second; `null` restores provider control. |
-| `sensor_resolution` | `{width_px, height_px}` or `null` | Select an advertised raw sensor mode; `null` lets Picamera2 choose. |
+| `sensor_resolution` | `{width_px, height_px}` or `null` | Give Picamera2 a best-match sensor-size hint; `null` leaves selection entirely to the provider. |
 | `output_resolution` | Positive even `{width_px, height_px}` | Exact dimensions of every encoded MJPEG/JPEG frame. |
 | `rotation_degrees` | `0`, `90`, `180`, or `270` | Clockwise JPEG EXIF orientation; encoded dimensions are unchanged. |
 | `focus.mode` | `unmanaged` | Leave focus behavior to the provider. |
@@ -250,11 +252,11 @@ clients never receive a successful partially applied configuration.
 | `focus.mode` | `auto` | Select one-shot autofocus mode; call `/api/v1/camera/autofocus` to run a scan. |
 | `focus.mode` | `continuous` | Let the camera continually adjust focus. |
 
-Read `/api/v1/camera/capabilities` first. A syntactically valid value that the
-active camera does not advertise returns `422 invalid_request` and leaves the
-previous settings active. Changes that require a pipeline restart temporarily
-set the state to `reconfiguring`; connected stream clients wait and continue
-when the first frame from the new configuration arrives.
+Read `/api/v1/camera/capabilities` before requesting optional controls. A
+provider-rejected configuration leaves the previous settings active. Changes
+that require a pipeline restart temporarily set the state to `reconfiguring`;
+connected stream clients wait and continue when the first frame from the new
+configuration arrives.
 """,
     response_model=CameraStatus,
     responses=CAMERA_SETTINGS_RESPONSES,

@@ -73,7 +73,7 @@ def _assert_pi5_bookworm() -> None:
     assert "bookworm" in os_release, "camera validation requires Bookworm"
 
 
-def test_pi5_discovered_stream_modes_controls_metadata_and_cleanup() -> None:
+def test_pi5_provider_selected_stream_controls_metadata_and_cleanup() -> None:
     _assert_pi5_bookworm()
     frames: list[bytes] = []
     frame_lock = Lock()
@@ -94,17 +94,13 @@ def test_pi5_discovered_stream_modes_controls_metadata_and_cleanup() -> None:
         capabilities = device.capabilities
         assert capabilities.device_model == device.device_model
 
-        selectable = next(
-            (mode for mode in capabilities.sensor_modes if mode.resolution is not None),
-            None,
+        assert capabilities.sensor_modes == ()
+        applied_sensor = (
+            device.stream_info.sensor_resolution if device.stream_info else None
         )
-        if selectable is not None:
-            fps = None
-            if capabilities.frame_rate_control and selectable.max_fps is not None:
-                fps = min(30.0, selectable.max_fps)
-            device.reconfigure(
-                _settings(sensor_resolution=selectable.resolution, fps=fps)
-            )
+        if applied_sensor is not None:
+            fps = 30.0 if capabilities.frame_rate_control else None
+            device.reconfigure(_settings(sensor_resolution=applied_sensor, fps=fps))
             _wait_for_frames(frames, frame_lock, frame_event, minimum=4)
 
         if "continuous" in capabilities.focus.modes:
@@ -168,7 +164,8 @@ def test_physical_broker_rotation_and_multipart_delivery() -> None:
     _assert_pi5_bookworm()
     service = CameraService(Picamera2Device(device_index=0), backend="rpi")
     try:
-        assert service.status().state == "streaming"
+        camera_status = service.status()
+        assert camera_status.state == "streaming", camera_status.unavailable_reason
         for rotation, expected_orientation in {
             0: 1,
             90: 6,

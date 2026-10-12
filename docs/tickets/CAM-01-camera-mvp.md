@@ -6,7 +6,9 @@ original IMX708-only proposal.
 ## Outcome
 
 - One process-scoped camera at Picamera2 index 0.
-- Runtime sensor-mode and control discovery without a model allowlist.
+- Runtime control discovery without a model allowlist.
+- Provider-selected sensor modes with requested and applied sizes reported
+  separately.
 - Provider-managed sensor, frame-rate, and focus defaults.
 - Independent requested sensor and encoded-output resolutions.
 - Shared 1280x720-by-default MJPEG stream and latest-image endpoint.

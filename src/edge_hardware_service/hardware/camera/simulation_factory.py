@@ -95,17 +95,6 @@ class SimulationCameraDevice:
                     "operation": "validate settings",
                 },
             )
-        if (
-            settings.sensor_resolution is not None
-            and settings.sensor_resolution != DEFAULT_OUTPUT_RESOLUTION
-        ):
-            raise InvalidRequestError(
-                "The simulation camera advertises sensor resolution 1280x720 only",
-                details={
-                    "component": "camera",
-                    "operation": "validate settings",
-                },
-            )
 
     def start(
         self,

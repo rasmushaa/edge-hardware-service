@@ -16,7 +16,6 @@ advertise them. Missing metadata remains present as `null` in camera status.
 
 Immediately after opening the device—and before streaming—the adapter reads:
 
-- `sensor_modes` for raw resolution, format, bit depth, and maximum FPS;
 - `camera_controls` for frame-duration and focus controls;
 - `camera_properties["Model"]` for informational device identity.
 
@@ -24,10 +23,13 @@ The public `GET /api/v1/camera/capabilities` response is a normalized snapshot
 of service-supported features. It deliberately does not expose the complete raw
 Picamera2 control map. Metadata capability flags record fields observed in
 completed requests and can change from `false` to `true` after streaming begins.
-If sensor-mode enumeration fails with an operating-system error, the adapter
-reopens the camera and continues with provider-managed streaming. Capabilities
-then contain an empty mode list plus a `discovery_warnings` explanation, and
-explicit sensor selection remains unsupported.
+
+The adapter deliberately does not read Picamera2's `sensor_modes` property.
+That property temporarily configures every raw mode and allocates DMA buffers,
+which can exhaust or fragment the Raspberry Pi camera heap before the real
+stream starts. Physical capabilities therefore return an empty `sensor_modes`
+list. The field is informational, not an allowlist; sensor-size preferences are
+passed directly to Picamera2/libcamera.
 
 Camera discovery or startup failure does not prevent GPIO from operating. The
 camera status remains `unavailable`, while camera operations and capability
@@ -52,15 +54,13 @@ The initial settings request only a 1280x720 YUV420 encoded stream:
 }
 ```
 
-`null` FPS and sensor resolution leave selection to Picamera2. Unmanaged focus
-means the service sends no focus control. Output dimensions must be positive and
-even, and the provider must preserve the exact requested size.
-
-An explicit sensor resolution must match an advertised mode. When several raw
-modes share that resolution, the adapter removes modes below the requested FPS,
-then prefers highest bit depth, highest maximum FPS, and provider order. Cameras
-without raw modes can stream with provider selection but reject explicit sensor
-selection.
+`null` FPS and sensor resolution leave selection to Picamera2. A non-null sensor
+resolution is a best-match hint: libcamera may select a different raw mode based
+on aspect ratio, format, frame rate, crop, and pipeline constraints. Camera
+settings retain the requested hint, while `stream.sensor_resolution` reports the
+applied size when Picamera2 exposes it. Unmanaged focus means the service sends
+no focus control. Output dimensions must be positive and even, and the provider
+must preserve the exact requested size.
 
 Settings patches are transactions. Capability and schema checks happen before
 provider calls. Sensor/output changes and resets to provider-managed controls
@@ -91,16 +91,17 @@ latest-frame broker. Clients share complete JPEG frames; slow clients skip old
 frames rather than creating queues. Rotation is represented by JPEG EXIF
 orientation and does not change encoded pixels.
 
-Simulation uses the packaged 1280x720 MJPEG clip. It advertises that single
-sensor/output size, provider-managed 30 FPS when `fps` is null, deterministic
-focus operations, and deterministic temperature metadata. Unsupported simulated
-resolutions are rejected through the same capability error as physical devices.
+Simulation uses the packaged 1280x720 MJPEG clip. It reports that fixed applied
+sensor/output size, accepts any sensor-size hint, uses provider-managed 30 FPS
+when `fps` is null, and provides deterministic focus and temperature metadata.
+Unsupported output resolutions remain rejected because the fixture cannot
+produce them exactly.
 
 ## Validation
 
-Portable unit and API tests cover discovery, arbitrary model names, fixed-focus
-devices, missing raw modes, optional metadata, duplicate-mode selection, atomic
-rollback, exact output dimensions, and simulation behavior.
+Portable unit and API tests cover arbitrary model names, fixed-focus devices,
+non-enumerating startup, provider sensor-mode substitution, optional metadata,
+atomic rollback, exact output dimensions, and simulation behavior.
 
 Physical validation remains opt-in:
 
@@ -110,8 +111,8 @@ make hw-test-docker
 ```
 
 These combined native and container hardware commands also test GPIO. Their
-camera cases run on Raspberry Pi 5 Bookworm, discover the connected camera,
-stream 1280x720 MJPEG, exercise only advertised sensor/focus capabilities,
-verify broker behavior, and release the device. They do not start the deployed
-HTTP API. Documentation must list actual validated models rather than treating
-generic discovery as proof of universal compatibility.
+camera cases run on Raspberry Pi 5 Bookworm, open the connected camera, stream
+1280x720 MJPEG, exercise only advertised controls, verify broker behavior, and
+release the device. They do not start the deployed HTTP API. Documentation must
+list actual validated models rather than treating generic discovery as proof of
+universal compatibility.

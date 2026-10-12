@@ -1,22 +1,34 @@
 # CAM-02: Delegate sensor-mode selection to Picamera2
 
-Status: TODO. Remove the linked temporary code comments when this ticket is
-implemented.
+Status: implemented in the pre-release API.
 
-## Context
+## Outcome
 
-The camera adapter currently enumerates every raw sensor mode during startup
-and accepts an explicit `sensor_resolution` only when it exactly matches one of
-those modes. This makes the service's discovery snapshot the authority for
-selection even though Picamera2 and libcamera already validate configurations
-and choose the best available sensor mode.
+- Physical startup no longer reads Picamera2's invasive `sensor_modes`
+  property or reopens the camera after enumeration failure.
+- Non-null `sensor_resolution` values are passed directly to Picamera2 as
+  best-match `sensor.output_size` hints without service-side allowlisting.
+- `settings.sensor_resolution` retains the requested hint, while
+  `stream.sensor_resolution` is derived only from the applied configuration.
+- Encoded output dimensions remain exact and independently validated.
+- The physical capability snapshot leaves `sensor_modes` empty by design;
+  lightweight controls, focus ranges, identity, and observed metadata remain
+  available.
+
+## Previous behavior
+
+The camera adapter enumerated every raw sensor mode during startup and accepted
+an explicit `sensor_resolution` only when it exactly matched one of those
+modes. This made the service's discovery snapshot the authority for selection
+even though Picamera2 and libcamera already validate configurations and choose
+the best available sensor mode.
 
 Eager enumeration is also not a safe universal prerequisite. Picamera2 obtains
 the detailed `sensor_modes` list by repeatedly reconfiguring the camera. That
 can consume enough memory to fail on constrained Raspberry Pi systems, while
 the same camera may still be able to configure and stream normally.
 
-## Intended behavior
+## Implemented behavior
 
 - Treat a non-null `sensor_resolution` as a best-match request, not an exact
   hardware-mode requirement.
@@ -28,8 +40,8 @@ the same camera may still be able to configure and stream normally.
   active Picamera2 configuration, not from the request.
 - Continue requiring `output_resolution` to be applied exactly. Sensor-mode
   substitution must not weaken the encoded-output contract.
-- Translate a provider rejection into the existing capability error and retain
-  transactional rollback behavior.
+- Surface a provider rejection through the existing camera error contract and
+  retain transactional rollback behavior.
 
 Picamera2's closest match is not necessarily the numerically nearest
 resolution. Selection may also account for aspect ratio, raw format, bit depth,
