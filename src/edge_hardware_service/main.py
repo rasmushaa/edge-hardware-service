@@ -38,7 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             gpio_factory = SimulationDeviceFactory()
             camera_service = CameraService(
-                SimulationCameraDevice(),
+                SimulationCameraDevice,
                 backend="simulation",
             )
         else:
@@ -61,20 +61,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise
 
             gpio_factory = GpioZeroDeviceFactory()
-            try:
+
+            def create_camera(device_index: int):
                 from edge_hardware_service.hardware.camera.picamera2_device import (
                     Picamera2Device,
                 )
 
-                camera_service = CameraService(
-                    Picamera2Device(device_index=0),
-                    backend="rpi",
-                )
-            except Exception as error:
-                # Camera capability degrades independently. GPIO remains a
-                # required provider for the Raspberry Pi backend.
-                reason = str(error) or type(error).__name__
-                camera_service = CameraService.unavailable("rpi", reason)
+                return Picamera2Device(device_index=device_index)
+
+            # Camera capability degrades independently. The service retains the
+            # factory so an explicit reconnect can retry without restarting GPIO.
+            camera_service = CameraService(create_camera, backend="rpi")
 
         gpio_service = GpioService(gpio_factory)
         app.state.gpio_service = gpio_service

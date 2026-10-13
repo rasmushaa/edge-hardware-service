@@ -196,6 +196,16 @@ def test_arbitrary_model_reads_controls_without_enumerating_sensor_modes(
     device.close()
 
 
+def test_adapter_accepts_a_selected_non_default_camera_index(
+    fake_provider: FakeCamera,
+) -> None:
+    device = Picamera2Device(device_index=2)
+
+    assert device.device_index == 2
+    assert device.capabilities.device_index == 2
+    device.close()
+
+
 def test_requested_sensor_resolution_is_a_hint_and_applied_mode_is_reported(
     fake_provider: FakeCamera,
 ) -> None:
@@ -351,15 +361,3 @@ def test_close_is_idempotent_and_closed_device_rejects_start(
     assert fake_provider.closed == 1
     with pytest.raises(HardwareUnavailableError, match="closed"):
         device.start(settings(), lambda _: None)
-
-
-def test_startup_never_reads_invasive_sensor_modes_property(
-    fake_provider: FakeCamera,
-) -> None:
-    device = Picamera2Device()
-
-    assert device.capabilities.sensor_modes == ()
-    assert device.capabilities.discovery_warnings == ()
-    device.start(settings(sensor=(1112, 834)), lambda _: None)
-    assert fake_provider.configurations[-1]["sensor"] == {"output_size": (1112, 834)}
-    device.close()

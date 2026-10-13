@@ -13,6 +13,7 @@ class ErrorResponse(BaseModel):
         examples=[
             "not_found",
             "conflict",
+            "camera_not_connected",
             "invalid_request",
             "hardware_unavailable",
             "operation_timeout",
@@ -42,6 +43,14 @@ class ErrorResponse(BaseModel):
                         "pin": 17,
                         "active_mode": "output",
                         "requested_mode": "input",
+                    },
+                },
+                {
+                    "code": "camera_not_connected",
+                    "message": "Camera is intentionally disconnected",
+                    "details": {
+                        "component": "camera",
+                        "operation": "access camera",
                     },
                 },
                 {

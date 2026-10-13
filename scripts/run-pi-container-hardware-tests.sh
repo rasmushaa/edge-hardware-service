@@ -5,8 +5,8 @@
 set -euo pipefail
 
 readonly IMAGE="edge-hardware-service:container-hw-test"
-readonly RUNNING_API_CONTAINER="edge-hardware-service"
 readonly PROVIDER_PROBE='from gpiozero import Device; Device.ensure_pin_factory(); factory = Device.pin_factory; print(type(factory).__module__ + "." + type(factory).__qualname__); factory.close()'
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ "$#" -ne 0 ]; then
     echo "This command takes no arguments; it prompts for every required value." >&2
@@ -20,7 +20,7 @@ echo "- Raspberry Pi 5 running Raspberry Pi OS Bookworm with Docker access."
 echo "- A Picamera2-compatible camera must be available at index 0."
 echo "- Choose three distinct, unconnected BCM pins from 2 through 27."
 echo "- The pins must not be assigned to an overlay, peripheral, or other process."
-echo "- Stop the deployed edge-hardware-service container before testing."
+echo "- WARNING: this command stops every running Docker container on the selected Pi."
 echo
 echo "What this tests:"
 echo "- ARM64 image packaging and Raspberry Pi OS GPIO/camera packages."
@@ -77,11 +77,16 @@ echo "- Digital output: BCM ${output_pin} (driven LOW and HIGH, then left LOW)"
 echo "- PWM output: BCM ${pwm_pin} (duty cycle changes, then left at zero)"
 echo "- Camera: Picamera2 index 0"
 echo "- Device access: --privileged with /run/udev mounted read-only"
-read -r -p "Confirm the pins are unconnected and the camera is available [y/N]: " confirmation
+echo
+echo "WARNING: continuing will stop ALL running Docker containers on ${pi_host}."
+echo "Those containers will remain stopped after the test."
+read -r -p "Stop all Pi containers and confirm the pins and camera [y/N]: " confirmation
 if [[ ! "${confirmation}" =~ ^[Yy]$ ]]; then
     echo "Container hardware tests cancelled."
     exit 1
 fi
+
+"${SCRIPT_DIR}/stop-pi-containers.sh" "${pi_host}"
 
 echo "Checking Docker and Raspberry Pi access on ${pi_host}..."
 ssh "${pi_host}" "
@@ -95,12 +100,6 @@ ssh "${pi_host}" "
         *) echo \"Target is not a Raspberry Pi 5: \${model}\" >&2; exit 1 ;;
     esac
     grep --quiet 'VERSION_CODENAME=bookworm' /etc/os-release
-    if docker ps --format '{{.Names}}' \
-        | grep --quiet --line-regexp '${RUNNING_API_CONTAINER}'; then
-        echo \"Container ${RUNNING_API_CONTAINER} is running and may own the hardware.\" >&2
-        echo \"Stop it before running container hardware tests.\" >&2
-        exit 1
-    fi
     echo \"Target: \${model}\"
 "
 

@@ -74,11 +74,13 @@ class _JpegOutput(BufferedIOBase):
 
 
 class Picamera2Device:
-    """Own camera index zero and publish one continuous MJPEG stream."""
+    """Own one selected camera and publish one continuous MJPEG stream."""
 
     def __init__(self, device_index: int = 0) -> None:
-        if device_index != 0:
-            raise ValueError("the camera service supports camera index 0 only")
+        if isinstance(device_index, bool) or not isinstance(device_index, int):
+            raise TypeError("device_index must be an integer")
+        if device_index < 0:
+            raise ValueError("device_index must be non-negative")
         try:
             from libcamera import controls
             from picamera2 import Picamera2

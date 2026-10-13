@@ -5,7 +5,6 @@
 set -euo pipefail
 
 readonly REMOTE_DIR="edge-hardware-service"
-readonly RUNNING_API_CONTAINER="edge-hardware-service"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ "$#" -ne 0 ]; then
@@ -22,7 +21,7 @@ echo "- Raspberry Pi OS GPIO Zero, libcamera, Picamera2, and NumPy packages inst
 echo "- A Picamera2-compatible camera must be available at index 0."
 echo "- Choose three distinct, unconnected BCM pins from 2 through 27."
 echo "- The pins must not be assigned to an overlay, peripheral, or other process."
-echo "- Stop the deployed edge-hardware-service container before testing."
+echo "- WARNING: this command stops every running Docker container on the selected Pi."
 echo
 echo "What this tests:"
 echo "- First, the current checkout is mirrored to ~/edge-hardware-service; stale"
@@ -68,11 +67,16 @@ echo "- Digital output: BCM ${output_pin} (driven LOW and HIGH, then left LOW)"
 echo "- PWM output: BCM ${pwm_pin} (duty cycle changes, then left at zero)"
 echo "- Camera: Picamera2 index 0"
 echo "- Repository: mirrored before tests; remote .venv: deleted and recreated"
-read -r -p "Confirm synchronization, safe pins, and camera availability [y/N]: " confirmation
+echo
+echo "WARNING: continuing will stop ALL running Docker containers on ${pi_host}."
+echo "Those containers will remain stopped after the test."
+read -r -p "Stop all Pi containers and confirm synchronization, pins, and camera [y/N]: " confirmation
 if [[ ! "${confirmation}" =~ ^[Yy]$ ]]; then
     echo "Hardware tests cancelled."
     exit 1
 fi
+
+"${SCRIPT_DIR}/stop-pi-containers.sh" "${pi_host}"
 
 "${SCRIPT_DIR}/sync-repo-to-pi.sh" "${pi_host}"
 
@@ -87,13 +91,6 @@ ssh "${pi_host}" "
         *) echo \"Target is not a Raspberry Pi 5: \${model}\" >&2; exit 1 ;;
     esac
     grep --quiet 'VERSION_CODENAME=bookworm' /etc/os-release
-    if command -v docker >/dev/null 2>&1 \
-        && docker ps --format '{{.Names}}' \
-            | grep --quiet --line-regexp '${RUNNING_API_CONTAINER}'; then
-        echo \"Container ${RUNNING_API_CONTAINER} is running and may own the hardware.\" >&2
-        echo \"Stop it before running native hardware tests.\" >&2
-        exit 1
-    fi
     echo \"Running native hardware tests on: \${model}\"
     EDGE_HARDWARE_RPI_INPUT_PIN='${input_pin}' \
     EDGE_HARDWARE_RPI_OUTPUT_PIN='${output_pin}' \

@@ -12,6 +12,7 @@ from edge_hardware_service.models.errors import ErrorResponse
 APP_ERROR_STATUS_CODES: Final[dict[ErrorCode, int]] = {
     "not_found": status.HTTP_404_NOT_FOUND,
     "conflict": status.HTTP_409_CONFLICT,
+    "camera_not_connected": status.HTTP_409_CONFLICT,
     "invalid_request": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "hardware_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
     "operation_timeout": status.HTTP_504_GATEWAY_TIMEOUT,
@@ -24,6 +25,10 @@ NOT_FOUND_RESPONSE: dict[str, Any] = {
 CONFLICT_RESPONSE: dict[str, Any] = {
     "model": ErrorResponse,
     "description": "The operation conflicts with the current resource state.",
+}
+CAMERA_NOT_CONNECTED_RESPONSE: dict[str, Any] = {
+    "model": ErrorResponse,
+    "description": "The operation requires a connected camera.",
 }
 INVALID_REQUEST_RESPONSE: dict[str, Any] = {
     "model": ErrorResponse,

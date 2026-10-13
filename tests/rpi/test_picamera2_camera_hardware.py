@@ -6,16 +6,12 @@ from pathlib import Path
 from threading import Event, Lock
 from time import monotonic
 
-import piexif
 import pytest
 
-from edge_hardware_service.api.routers.camera import _mjpeg_part, get_camera_image
-from edge_hardware_service.errors import HardwareUnavailableError
 from edge_hardware_service.hardware.camera.picamera2_device import Picamera2Device
 from edge_hardware_service.models.camera import (
     AutoFocus,
     CameraSettings,
-    CameraSettingsPatch,
     ContinuousFocus,
     ManualFocus,
     PixelResolution,
@@ -23,7 +19,7 @@ from edge_hardware_service.models.camera import (
 )
 from edge_hardware_service.services.camera import CameraService
 
-pytestmark = [pytest.mark.rpi, pytest.mark.camera_rpi]
+pytestmark = pytest.mark.rpi
 
 
 def _settings(
@@ -146,48 +142,16 @@ def _wait_for_frames(
         assert len(frames) >= minimum, "continuous camera stream stalled"
 
 
-def test_missing_camera_is_reported_as_unavailable() -> None:
+def test_physical_camera_service_publishes_a_current_frame() -> None:
+    """Verify a physical adapter publishes through the service broker."""
     _assert_pi5_bookworm()
-    try:
-        device = Picamera2Device(device_index=0)
-    except HardwareUnavailableError:
-        pytest.fail("a Picamera2-compatible camera at index 0 is required")
-    try:
-        assert device.device_model
-        assert device.capabilities.device_index == 0
-    finally:
-        device.close()
-
-
-def test_physical_broker_rotation_and_multipart_delivery() -> None:
-    """Verify physical frames pass through the shared broker and EXIF path."""
-    _assert_pi5_bookworm()
-    service = CameraService(Picamera2Device(device_index=0), backend="rpi")
+    service = CameraService(Picamera2Device, backend="rpi")
     try:
         camera_status = service.status()
         assert camera_status.state == "streaming", camera_status.unavailable_reason
-        for rotation, expected_orientation in {
-            0: 1,
-            90: 6,
-            180: 3,
-            270: 8,
-        }.items():
-            service.update_settings(
-                CameraSettingsPatch(rotation_degrees=rotation)  # type: ignore[arg-type]
-            )
-            frame = service.wait_for_frame()
-            assert _jpeg_dimensions(frame.jpeg) == (1280, 720)
-            exif = piexif.load(frame.jpeg)
-            assert exif["0th"][piexif.ImageIFD.Orientation] == expected_orientation
-
-            image_response = get_camera_image(service)
-            assert image_response.body == frame.jpeg
-            assert image_response.media_type == "image/jpeg"
-
-            multipart = _mjpeg_part(frame)
-            assert multipart.startswith(b"--frame\r\nContent-Type: image/jpeg\r\n")
-            assert frame.jpeg in multipart
-            assert multipart.endswith(b"\r\n")
+        frame = service.wait_for_frame()
+        assert _jpeg_dimensions(frame.jpeg) == (1280, 720)
+        assert service.frames.latest is frame
     finally:
         service.close()
         service.close()

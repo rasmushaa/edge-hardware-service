@@ -12,13 +12,14 @@ fi
 readonly IMAGE="edge-hardware-service:dev"
 readonly CONTAINER_NAME="edge-hardware-service"
 readonly API_PORT="8000"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Manual Raspberry Pi runtime deployment"
 echo
 echo "Requirements:"
 echo "- Run 'make build' first to create the linux/arm64 runtime image."
 echo "- The SSH user must be able to run Docker on the Raspberry Pi."
-echo "- Deployment replaces the '${CONTAINER_NAME}' container if it exists."
+echo "- WARNING: deployment stops every running Docker container on the selected Pi."
 echo "- The container runs privileged with /run/udev mounted read-only."
 echo "- The final check calls /api/v1/health only; it does not exercise pins or camera endpoints."
 echo
@@ -27,7 +28,10 @@ if [ -z "${pi_host}" ]; then
     echo "An SSH host is required, for example pi@edgepi.local." >&2
     exit 1
 fi
-read -r -p "Replace ${CONTAINER_NAME} on ${pi_host} with ${IMAGE} [y/N]: " confirmation
+echo
+echo "WARNING: continuing will stop ALL running Docker containers on ${pi_host}."
+echo "Only ${CONTAINER_NAME} will be started by this deployment."
+read -r -p "Stop all Pi containers and deploy ${IMAGE} [y/N]: " confirmation
 if [[ ! "${confirmation}" =~ ^[Yy]$ ]]; then
     echo "Deployment cancelled."
     exit 1
@@ -54,6 +58,8 @@ echo "Transferring ${IMAGE}..."
 docker save "${IMAGE}" \
     | gzip -1 \
     | ssh "${PI_HOST}" "gzip -d | docker load"
+
+"${SCRIPT_DIR}/stop-pi-containers.sh" "${PI_HOST}"
 
 echo "Starting ${CONTAINER_NAME}..."
 ssh "${PI_HOST}" "

@@ -1,7 +1,7 @@
 # CI policy:
 # - Every branch push and pull request runs the fast host-side checks.
-# - Pull requests targeting main, and pushes that land on main, additionally build
-#   and smoke-test the production runtime image.
+# - Pull requests targeting main, and pushes that land on main, additionally run
+#   the Bookworm adapter suite, then build and smoke-test the runtime image.
 # - Raspberry Pi hardware tests remain manual because hosted runners have no GPIO
 #   or camera devices.
 name: CI
@@ -42,6 +42,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Bookworm non-hardware tests
+        run: make no-hw-test-docker
 
       - name: Build Docker image
         run: |

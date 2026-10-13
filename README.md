@@ -1,430 +1,243 @@
 # Edge Hardware Service
 
-[![API](https://img.shields.io/badge/API-v1-0A7BBB)](#api-overview)
-[![status](https://img.shields.io/badge/status-pre--release-orange)](#project-status)
-[![runtime](https://img.shields.io/badge/runtime-Bookworm_ARM64-A22846)](#container-images)
-[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+**A small HTTP hardware boundary for Raspberry Pi edge AI applications.**
+
+[![CI](https://github.com/rasmushaa/edge-hardware-service/actions/workflows/ci.yaml/badge.svg)](https://github.com/rasmushaa/edge-hardware-service/actions/workflows/ci.yaml)
+[![release](https://img.shields.io/badge/release-v0.1.1rc1-orange)](https://github.com/rasmushaa/edge-hardware-service/releases/tag/v0.1.1rc1)
+[![container](https://img.shields.io/badge/GHCR-0.1.1rc1--bookworm-2496ED?logo=docker&logoColor=white)](https://github.com/rasmushaa/edge-hardware-service/pkgs/container/edge-hardware-service)
+[![API docs](https://img.shields.io/badge/API_docs-online-0A7BBB)](https://rasmushaa.github.io/edge-hardware-service/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Containerized HTTP adapter for Raspberry Pi GPIO and Picamera2-compatible
-cameras. Applications use a small, versioned API instead of depending directly
-on Raspberry Pi OS hardware libraries, and the same API runs with deterministic
-simulation backends on macOS, Linux, and CI.
+Edge Hardware Service exposes Raspberry Pi cameras and GPIO through a typed, versioned FastAPI interface.  
+An edge inference application can consume camera frames and control pins  
+without importing Picamera2, libcamera, GPIO Zero,  
+or other Raspberry Pi-specific packages into its own environment.
 
-> [!IMPORTANT]
-> This project is in pre-release development. GPIO API v1 and the Bookworm
-> ARM64 image are functional, but no GHCR image or compatibility guarantee has
-> been published yet. Camera support discovers Picamera2 controls at runtime
-> and delegates sensor-mode selection to libcamera; only hardware explicitly
-> named in the validation notes should be treated as physically validated.
+## Why this exists
 
-## Quick start
+Picamera2 is coupled to native libcamera bindings, Linux camera drivers, and the Raspberry Pi OS package set.  
+GPIO access has similar device, permissions, and provider constraints.  
+Putting those dependencies inside an ML application makes its environment harder to reproduce, test, and run away from the Pi.  
 
-Simulation is the default backend and requires no Raspberry Pi libraries or
-hardware.
+This service moves that coupling behind one local network boundary:
 
-```shell
-uv sync
-uv run uvicorn edge_hardware_service.main:app --reload
-```
+- The Raspberry Pi owns the camera, GPIO devices, and native dependencies.
+- Client applications depend only on HTTP, JSON, JPEG, and MJPEG contracts.
+- A deterministic simulation backend exposes the same API on macOS, Linux,
+  and CI without physical hardware.
+- Runtime capability discovery adapts the camera API to the connected
+  Picamera2-compatible device instead of using a model allowlist.
 
-The service is then available at:
+The result is a portable edge AI application and a small, independently
+testable hardware service with one reason to change.
 
-- Swagger UI: <http://localhost:8000/docs>
-- ReDoc: <http://localhost:8000/redoc>
-- OpenAPI JSON: <http://localhost:8000/openapi.json>
-- Health check: <http://localhost:8000/api/v1/health>
+![Dependency isolation before and after introducing the hardware service](docs/dependency_chart.drawio.svg)
 
-Try the simulated GPIO API:
+## Install and use
 
-```shell
-curl --request PUT \
-  --header 'Content-Type: application/json' \
-  --data '{"value":true}' \
-  http://localhost:8000/api/v1/gpio/22/value
+The generated API reference is the main user documentation. The current `main`
+branch is published at <https://rasmushaa.github.io/edge-hardware-service/>.
+When running the service locally, the same operations, request examples,
+response schemas, and errors are available in Swagger at `/docs`.
 
-curl http://localhost:8000/api/v1/gpio/22
-curl http://localhost:8000/api/v1/gpio
-```
+The API is organized into three areas:
 
-To use the container locally, build and start the current source tree:
+- Health checks for service readiness.
+- Camera state, capabilities, settings, lifecycle, autofocus, images, and MJPEG.
+- GPIO inspection, configuration, digital I/O, PWM, and pin release.
 
-```shell
-docker build --platform linux/arm64 --tag edge-hardware-service:dev .
-docker run --rm --platform linux/arm64 \
-  --publish 8000:8000 \
-  edge-hardware-service:dev
-```
+See the published API documentation for the complete endpoint reference.
 
-The production image targets `linux/arm64`. Docker Desktop may use emulation
-when the host architecture differs.
+### Run from the Python repository
 
-## Project status
+Use this option for local development without Raspberry Pi hardware. Python
+3.11 and [uv](https://docs.astral.sh/uv/) are required.
 
-The current service release is `0.1.0` and the public HTTP contract is API
-`v1`. The service currently provides:
+1. Clone, install, and run:
 
-- Digital input with no pull, pull-up, or pull-down configuration.
-- Digital output reads and writes.
-- PWM duty-cycle and frequency control.
-- Pin configuration, status, registry inspection, and release.
-- Equivalent Raspberry Pi and deterministic simulation backends.
-- One shared MJPEG camera stream, latest-image access, runtime capability
-  discovery, optional focus controls, and nullable telemetry.
+   ```shell
+   git clone https://github.com/rasmushaa/edge-hardware-service.git
+   cd edge-hardware-service
+   uv sync
+   uv run uvicorn edge_hardware_service.main:app --reload
+   ```
 
-Hardware validation currently covers Raspberry Pi 5 Model B, 64-bit Raspberry
-Pi OS Bookworm, and Python 3.11. See the
-[hardware validation roadmap](docs/hardware-validation-roadmap.md) for the
-exact scope and known limitations.
+2. See the Swagger docs at <http://localhost:8000/docs>.
 
-The physical camera adapter accepts the Picamera2-compatible camera at index 0
-without a model allowlist. Support is capability-driven, so fixed-focus cameras
-can stream without autofocus controls. See the
-[camera support roadmap](docs/camera-roadmap.md) for limits and validation.
+This runs the simulation backend. No camera, GPIO devices, or Raspberry Pi
+packages are needed.
 
-## Container images
+### Pull and run the Docker image on a Raspberry Pi
 
-The container is the primary deployment artifact. No public image is available
-until the first release; build `edge-hardware-service:dev` locally in the
-meantime.
+Use a 64-bit Raspberry Pi OS Bookworm host with Docker installed.
 
-| API | Runtime | Platform | Status | Release image |
-| --- | --- | --- | --- | --- |
-| v1 | Raspberry Pi OS Bookworm | `linux/arm64` | Pre-release; Pi 5 validated | Planned: `ghcr.io/rasmushaa/edge-hardware-service:<version>-bookworm` |
+1. Pull the image:
 
-Raspberry Pi-specific Python packages are installed from the Raspberry Pi OS
-apt repository. uv owns only the portable application dependencies. This keeps
-GPIO Zero, lgpio, `rpi-lgpio`, libcamera, Picamera2, and the compatible NumPy
-build aligned with the operating-system runtime.
+   ```shell
+   docker pull ghcr.io/rasmushaa/edge-hardware-service:<version>-bookworm
+   ```
 
-The Dockerfile provides three targets:
+2. Run it with hardware access enabled:
 
-| Target | Purpose |
-| --- | --- |
-| `runtime` | Default single-worker production service. |
-| `container-no-hw-test` | Unit and in-process API tests without device access. |
-| `container-hw-test` | Combined GPIO and camera tests on physical Raspberry Pi hardware. |
+   ```shell
+   docker run --rm \
+     --name edge-hardware-service \
+     --privileged \
+     --volume /run/udev:/run/udev:ro \
+     --publish 8000:8000 \
+     --env EDGE_HARDWARE_SERVICE_BACKEND=rpi \
+     ghcr.io/rasmushaa/edge-hardware-service:<version>-bookworm
+   ```
 
-Build and run the non-hardware test image with:
+3. See the Swagger docs at `http://<raspberry-pi-ip>:8000/docs`.
 
-```shell
-make no-hw-test-docker
-```
+## Runtime model
 
-This test image runs pytest. It does not start Uvicorn, publish an HTTP port, or
-access Raspberry Pi devices.
-
-## API overview
-
-All public application endpoints use the `/api/v1` prefix. Pin numbers are
-Broadcom GPIO numbers (BCM), not physical header positions.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/health` | Check process readiness. |
-| `GET` | `/api/v1/camera` | Inspect camera state, effective stream, settings, and telemetry. |
-| `GET` | `/api/v1/camera/capabilities` | Inspect runtime-discovered controls and output constraints. |
-| `PATCH` | `/api/v1/camera/settings` | Atomically update supported camera settings. |
-| `POST` | `/api/v1/camera/autofocus` | Run one-shot autofocus when advertised. |
-| `GET` | `/api/v1/camera/stream` | Consume the shared MJPEG stream. |
-| `GET` | `/api/v1/camera/image` | Read the latest encoded JPEG. |
-| `GET` | `/api/v1/gpio` | Inspect the backend and complete open-pin registry. |
-| `GET` | `/api/v1/gpio/{pin}` | Inspect one open pin. |
-| `PUT` | `/api/v1/gpio/{pin}/configuration` | Configure or reconfigure input, output, or PWM mode. |
-| `GET` | `/api/v1/gpio/{pin}/value` | Read a digital input, opening it when needed. |
-| `PUT` | `/api/v1/gpio/{pin}/value` | Write a digital output, opening it when needed. |
-| `PUT` | `/api/v1/gpio/{pin}/pwm` | Set PWM duty cycle and optional frequency. |
-| `DELETE` | `/api/v1/gpio/{pin}` | Close and release a pin. |
-
-Swagger contains the complete request and response schemas, examples for every
-supported value, and documented error responses.
-
-Expected failures share one response envelope containing a stable `code`, a
-human-readable `message`, and optional structured `details`:
-
-| Status | Code | Meaning |
-| --- | --- | --- |
-| `404` | `not_found` | A required application resource does not exist. |
-| `409` | `conflict` | The request conflicts with the current resource state. |
-| `422` | `invalid_request` | Input is invalid or a requested capability is unsupported. |
-| `503` | `hardware_unavailable` | A camera, GPIO device, or provider cannot complete the operation. |
-| `504` | `operation_timeout` | A hardware operation exceeded its deadline. |
-
-Messages and details identify the component, pin, provider, operation, or
-validation fields involved. Unexpected software failures remain opaque `500`
-responses rather than exposing internal exception text.
-
-Input values are electrical levels: `true` is HIGH and `false` is LOW,
-regardless of pull direction. A no-pull input needs an external pull or driven
-signal for a stable physical value.
-
-## Runtime configuration
-
-| Environment variable | Values | Default | Meaning |
+| Environment variable | Values | Default | Purpose |
 | --- | --- | --- | --- |
-| `EDGE_HARDWARE_SERVICE_BACKEND` | `simulation`, `rpi` | `simulation` | Select the portable in-memory or physical GPIO backend. |
+| `EDGE_HARDWARE_SERVICE_BACKEND` | `simulation`, `rpi` | `simulation` | Select deterministic adapters or physical Raspberry Pi providers. |
 
-The simulation backend is a supported client-development mode, not a test
-mock. It keeps GPIO state and loops a deterministic 1280x720 MJPEG fixture
-without importing Raspberry Pi packages. It does not simulate electrical
-circuits, optical quality, or arbitrary camera resolutions.
+The service uses one Uvicorn worker because camera ownership, GPIO ownership,
+and the pin registry are process-local. Do not scale this container by adding
+workers. Scale client applications independently instead.
 
-Raspberry Pi mode initializes one shared GPIO Zero provider during startup.
-Startup fails before the health endpoint becomes ready if no provider is
-available. The service deliberately uses one Uvicorn worker because GPIO
-ownership and the pin registry are process-local.
+The physical camera adapter manages one active camera at a time. Index `0` is
+the default; the connect endpoint can select another Picamera2 index. Camera
+controls and metadata are discovered from the provider, and unsupported
+optional controls fail without partially applying a settings patch.
 
-## Architecture
 
-```text
-                         HTTP API v1
-                              |
-                     FastAPI + Pydantic
-                              |
-                GpioService          CameraService
-             (pin ownership)      (stream and policy)
-                    |                     |
-          GpioDeviceFactory          CameraDevice
-               /       \               /      \
-       GPIO Zero    Simulation     Picamera2  Simulation
-              Raspberry Pi          macOS / Linux / CI
-```
+## Development
 
-The API layer validates HTTP data; services own lifecycle and policy; adapters
-isolate physical providers from deterministic simulation. Raspberry Pi imports
-stay entirely outside the simulation startup path. See
-[GPIO API architecture](docs/architecture.md) for the detailed boundaries.
-
-## Raspberry Pi deployment
-
-Select the physical backend only on a compatible Raspberry Pi host:
+Prerequisites for normal development are Python 3.11, uv, and Make. Docker with
+Buildx is required for container tests and Raspberry Pi deployment. Start with:
 
 ```shell
-docker run --rm \
-  --name edge-hardware-service \
-  --privileged \
-  --volume /run/udev:/run/udev:ro \
-  --publish 8000:8000 \
-  --env EDGE_HARDWARE_SERVICE_BACKEND=rpi \
-  edge-hardware-service:dev
-```
-
-`--privileged` is the deliberately broad initial configuration because camera
-and GPIO discovery can require several device interfaces. Narrow it to the
-specific devices and groups validated for the target system before treating
-the deployment as hardened.
-
-For the repository's ad hoc SSH workflow:
-
-```shell
-make build
-make deploy
-```
-
-Both commands explain their behavior, and deployment prompts for the Raspberry
-Pi SSH host and confirmation before replacing the existing
-`edge-hardware-service` container. `make build` creates the ARM64 `runtime`
-image, replaces the local `edge-hardware-service-dev` simulation container,
-publishes port 8000, prints the Swagger and ReDoc URLs, and stays attached to
-the terminal until Ctrl+C stops and removes it. `make deploy` transfers that
-image to the Pi and waits for the remote health endpoint. The remote health
-check does not exercise GPIO pins or camera endpoints. This is a manual
-development workflow, not a production release mechanism.
-
-## Testing on Raspberry Pi hardware
-
-No external components or wiring are required for the current GPIO validation.
-The selected input, digital-output, and PWM pins must be distinct, unconnected,
-and unused by another process or peripheral.
-
-Synchronize the current checkout to the Pi, recreate its native virtual
-environment, and run the combined GPIO and camera hardware suite:
-
-```shell
-make hw-test
-```
-
-Then run the same GPIO and camera hardware coverage inside the combined ARM64
-test image:
-
-```shell
-make hw-test-docker
-```
-
-Each hardware command prompts for the SSH host, three distinct unconnected BCM
-pins, and confirmation that the camera at index 0 is available. `make hw-test`
-also copies the repository with `scripts/sync-repo-to-pi.sh`, deletes and
-recreates the remote `.venv`, removes stale non-excluded files from the remote
-checkout, and verifies Raspberry Pi OS hardware-library imports before testing.
-The GPIO suite verifies internal pull-up/down input
-behavior, digital output state, PWM configuration, provider selection, and safe
-cleanup. The camera suite verifies provider-selected sensor configuration and
-exercises only advertised controls. These tests do not measure physical
-voltage or waveform accuracy and do not call the deployed HTTP API.
-
-## Development and testing
-
-Python 3.11 and [uv](https://docs.astral.sh/uv/) are required. Start with
-`make help`: it lists every supported test command, its required environment,
-the inputs it will request, and whether it accesses hardware. The Makefile is a
-convenience interface for testing; code-quality tools can still be run directly.
-
-```shell
+make help
 uv sync
 make no-hw-test
 ```
 
-### Test commands
-
-| Command | What it runs | What a pass proves | What it does not prove |
-| --- | --- | --- | --- |
-| `make no-hw-test` | All pytest tests except those marked `rpi`, using the local uv environment. This covers unit tests, simulation adapters, service policy, error contracts, and in-process FastAPI requests. | Portable application behavior works on the current development machine. | Raspberry Pi OS packages, the container image, Uvicorn as a running service, GPIO electrical behavior, or a physical camera. |
-| `make no-hw-test-docker` | Builds the ARM64 Bookworm `container-no-hw-test` image and runs the non-hardware pytest selection inside it. | The test image builds and the software suite works with its packaged Python and Raspberry Pi OS dependencies. | Device access, a running HTTP server, the production `runtime` image, or physical GPIO/camera behavior. |
-| `make hw-test` | Prompts for a Pi SSH host and three safe BCM pins, mirrors the checkout, recreates the remote `.venv`, then runs only the native GPIO and camera tests marked `rpi`. | The native Raspberry Pi OS providers can access the selected real GPIO pins and camera features exercised by the suite. | Container access, the deployed runtime HTTP API, voltage levels, PWM waveform accuracy, or unadvertised camera capabilities. |
-| `make hw-test-docker` | Builds the ARM64 `container-hw-test` image, transfers it to the Pi, checks native/container GPIO-provider parity, and runs the marked GPIO and camera tests with privileged device access. | The hardware test image can access the validated GPIO and camera hardware using the expected provider. | The production `runtime` image, deployed HTTP endpoints, voltage levels, PWM waveform accuracy, or other Pi/camera combinations. |
-
-`make build` and `make deploy` are not test suites. `make build` runs the
-production-shaped image locally with the simulation backend on port 8000;
-`make deploy` starts it remotely with the Raspberry Pi backend and checks its
-health endpoint. Neither command proves that physical GPIO or camera endpoints
-work.
-
-### CI and manual hardware validation
-
-GitHub-hosted Actions coverage is intentionally limited to the no-hardware
-tests. A green GitHub Actions run demonstrates the portable software behavior;
-it does not demonstrate that GPIO, Picamera2, device permissions, or provider
-selection work on a Raspberry Pi.
-
-Both hardware targets require deliberate, manual validation on a physical
-Raspberry Pi. Run them before recording a Pi, camera, or OS combination as
-validated. They prompt for the target and pins rather than reading hidden
-environment files, and the deployed service container must be stopped so it
-does not already own the devices.
-
-The Docker hardware test is relatively slow. `make hw-test-docker` builds an
-ARM64 image, exports the complete image, compresses it, copies it to the Pi over
-SSH, and loads it into the Pi Docker daemon before tests begin. Building ARM64
-on a non-ARM development machine may also use emulation. The transfer can take
-several minutes, especially over Wi-Fi; this is expected and is substantially
-heavier than syncing the source tree for `make hw-test`.
-
-### Optional local code-quality checks
-
-Install the repository's fast commit hooks once per clone:
+Install the repository's local quality hooks once per clone:
 
 ```shell
 uv run pre-commit install
 ```
 
-Run formatting and lint checks directly when needed:
+Run all code-quality checks explicitly with:
 
 ```shell
-uv run ruff check .
-uv run ruff format --check .
 uv run pre-commit run --all-files
 ```
 
-Pre-commit checks basic file hygiene, YAML/TOML validity, Python lint rules,
-import ordering, and Ruff formatting. Raspberry Pi tests remain opt-in and are
-not run by commit hooks.
+The hooks check file hygiene, YAML and TOML validity, Python lint rules, import
+ordering, and Ruff formatting. Raspberry Pi tests are intentionally opt-in.
 
-## DevOps
+## Testing strategy
 
-### Normal commits and pull requests
+The test layers answer different questions. A passing portable suite is not
+presented as evidence that physical hardware works.
 
-Development changes use ordinary branches and pull requests into `main`.
-Every branch push and pull request runs formatting, linting, and the complete
-non-hardware test suite. Pull requests targeting `main`, and commits that land
-on `main`, additionally build the production `runtime` image and require its
-`/api/v1/health` smoke test to pass. These CI builds are validation artifacts;
-they do not create Git tags, GitHub Releases, or published GHCR images.
-
-Raspberry Pi GPIO and camera tests remain manual because GitHub-hosted runners
-do not provide the required physical devices.
-
-### Release candidates and stable releases
-
-Releases start with a version-only pull request. GitHub CLI must be installed
-and authenticated locally, and `main` must be clean and exactly match
-`origin/main`.
-
-Create a release candidate with a PEP 440 `rcN` version:
-
-```shell
-make rc VERSION=0.1.1rc1
-```
-
-Promote a tested candidate to a stable release with:
-
-```shell
-make release VERSION=0.1.1
-```
-
-Each command creates a `release/v<version>` branch, updates `pyproject.toml`
-and `uv.lock`, runs pre-commit and non-hardware tests, commits the version
-change, pushes only the release branch, and opens a pull request into `main`.
-It never pushes directly to `main` and never creates a tag locally.
-
-The requested version must be strictly greater than both the current project
-version and every existing release tag. Release ordering follows RC semantics:
-`0.1.0rc1 < 0.1.0rc2 < 0.1.0 < 0.1.1rc1`. The local command checks this before
-opening the PR, and the release workflow repeats the check after merge so a
-manually created version PR cannot bypass it.
-
-Merging the release PR is the authorization to publish. A `main` workflow
-detects the project-version change, validates the release again, builds and
-smoke-tests the runtime image, and then creates the immutable `v<version>` tag.
-It publishes the exact image before creating the GitHub Release.
-
-| Version | GitHub Release | GHCR image |
+| Command | What it validates | What it does not validate |
 | --- | --- | --- |
-| `0.1.1rc1` | Prerelease `v0.1.1rc1` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.1rc1-bookworm` |
-| `0.1.1` | Stable release `v0.1.1` | `ghcr.io/rasmushaa/edge-hardware-service:0.1.1-bookworm` |
+| `make no-hw-test` | Unit, simulation, service-policy, error-contract, and in-process API behavior in the local uv environment. | Raspberry Pi packages, containers, or devices. |
+| `make no-hw-test-docker` | The same portable suite inside the ARM64 Bookworm test image with packaged native dependencies. | Device access or the production runtime process. |
+| `make smoke-test` | An existing runtime image starts with simulation and returns the expected health response. | Camera or GPIO hardware behavior. |
+| `make hw-test` | Native Raspberry Pi OS providers can exercise the selected real GPIO pins and connected camera. | Container device access or electrical measurements. |
+| `make hw-test-docker` | The hardware-test image can access the same real GPIO and camera providers. | The deployed runtime HTTP API or electrical measurements. |
 
-Stable releases also update
-`ghcr.io/rasmushaa/edge-hardware-service:latest-bookworm`; release candidates
-never move that alias. The latest stable GitHub Release is always available at
-<https://github.com/rasmushaa/edge-hardware-service/releases/latest>.
+### Manual Raspberry Pi hardware tests
 
-The release workflow treats the tag, exact image, and GitHub Release as
-separate state. Rerunning a partially failed release creates only missing
-artifacts. An existing tag on another commit is a hard failure, and immutable
-version tags are never moved or overwritten.
+The hardware suites need three distinct, unconnected BCM pins for input,
+digital output, and PWM, plus a camera visible to Picamera2. No external circuit
+is required for the current checks.
 
-## Raspberry Pi troubleshooting
+> **Warning:** `make hw-test` and `make hw-test-docker` stop every running
+> Docker container on the selected Raspberry Pi before testing. They do not
+> restart unrelated containers afterward.
 
-- `Falling back from lgpio` is a warning, not necessarily a failure. Check the
-  provider reported after fallback; the validated Pi 5 uses
-  `gpiozero.pins.rpigpio.RPiGPIOFactory` from `python3-rpi-lgpio`.
-- Missing `/dev/gpiochip*` devices indicate a host or container device-access
-  problem, not an API schema problem.
-- `GPIO busy` or line-request failures normally mean another process,
-  container, overlay, or peripheral owns the selected pin.
-- An image architecture other than `arm64` is not the validated Raspberry Pi
-  artifact. The provided Make targets check this before transfer.
-- A floating input configured with pull `none` has no stable value. Use an
-  internal pull or an external circuit when a deterministic physical read is
-  required.
+Run the suite natively on the Pi:
 
-## Release and versioning policy
+```shell
+make hw-test
+```
 
-The repository separates three versions:
+Run equivalent hardware coverage in the ARM64 test image:
 
-- API versions are path based, currently `/api/v1`.
-- Service releases follow Semantic Versioning and use Git tags such as
-  `v1.2.3`.
-- Image tags add the Raspberry Pi OS runtime, such as `1.2.3-bookworm`.
+```shell
+make hw-test-docker
+```
 
-Release candidates use PEP 440 versions such as `0.1.0rc1`; stable versions use
-`MAJOR.MINOR.PATCH`. Every release publishes an immutable exact image tag such
-as `0.1.0rc1-bookworm` or `0.1.0-bookworm`. Stable releases additionally move
-`latest-bookworm` to the highest stable version. Prereleases never move it.
+Both commands explain their effects and ask for the SSH target, safe pins,
+camera confirmation, and permission before stopping containers. The native
+command synchronizes the checkout and recreates the remote virtual environment.
+The container command builds, transfers, and loads the hardware-test image, so
+it can take several minutes over Wi-Fi.
 
-Consumers should use an exact image tag for reproducible deployments. Release
-tags are created only by the release workflow after a version PR is merged;
-they are never created by ordinary CI or moved to another commit.
+## Build and ad hoc deployment
 
-## Documentation
+Build the `linux/arm64` runtime image and run it locally with simulation:
 
-This project is licensed under the permissive [MIT License](LICENSE).
+```shell
+make build
+```
+
+This creates `edge-hardware-service:dev`, replaces the named local development
+container, publishes port 8000, and stays attached. Press Ctrl+C to stop the
+container; the built image remains available.
+
+Deploy that local image over SSH to a Raspberry Pi:
+
+> **Warning:** `make deploy` stops every running Docker container on the
+> selected Raspberry Pi. It restarts only `edge-hardware-service`.
+
+```shell
+make deploy
+```
+
+The command transfers the image, starts the physical backend, and waits for
+`/api/v1/health`. That health check proves process readiness only; use the
+manual hardware suites to validate GPIO and camera access. This workflow is a
+development convenience, not a production deployment system.
+
+## CI/CD and releases
+
+GitHub Actions applies the same separation of evidence:
+
+- Every branch push and pull request runs pre-commit and the portable test
+  suite on an ARM64 runner.
+- Pull requests to `main` and commits on `main` also run the Bookworm container
+  tests, build the runtime image, and smoke-test its health endpoint.
+- GPIO and camera hardware tests remain manual because hosted runners do not
+  have the required physical devices.
+
+Release work starts through a version-only pull request:
+
+```shell
+make rc VERSION=0.1.2rc1
+make release VERSION=0.1.2
+```
+
+These commands require an authenticated GitHub CLI, a clean `main` branch, and
+a version newer than the project version and all release tags. They create a
+release branch, update `pyproject.toml` and `uv.lock`, validate the change, and
+open a pull request. They never push directly to `main` or create a local tag.
+
+Merging the release PR authorizes the release workflow to:
+
+1. Re-run the portable checks.
+2. Build and smoke-test the runtime image.
+3. Create the immutable `v<version>` Git tag.
+4. Publish `ghcr.io/rasmushaa/edge-hardware-service:<version>-bookworm`.
+5. Create the matching GitHub Release.
+
+The badges at the top currently point to the `v0.1.1rc1` release candidate and
+its `0.1.1rc1-bookworm` image. Release candidates do not update
+`latest-bookworm`; when a stable release exists, that alias points to the
+highest stable version. Consumers should pin an exact image tag for reproducible
+deployments. The workflow detects partially completed releases and creates only
+missing artifacts without moving an existing version tag.
+
+## License
+
+Released under the permissive [MIT License](LICENSE).
