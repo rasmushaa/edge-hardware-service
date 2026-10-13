@@ -29,7 +29,12 @@ SIMULATION_CLIP_RESOURCE = "assets/camera-simulation.mjpeg"
 class SimulationCameraDevice:
     """Loop the packaged raw MJPEG clip at the configured frame rate."""
 
-    def __init__(self) -> None:
+    def __init__(self, device_index: int = 0) -> None:
+        if isinstance(device_index, bool) or not isinstance(device_index, int):
+            raise TypeError("device_index must be an integer")
+        if device_index < 0:
+            raise ValueError("device_index must be non-negative")
+        self._device_index = device_index
         self._lock = RLock()
         self._settings: CameraSettings | None = None
         self._frames: tuple[bytes, ...] = ()
@@ -40,6 +45,7 @@ class SimulationCameraDevice:
         self._telemetry = CameraTelemetry(sensor_temperature_c=25.0)
         self._capabilities = CameraCapabilities(
             backend="simulation",
+            device_index=device_index,
             device_model="simulation",
             sensor_modes=(
                 SensorModeCapability(
@@ -65,7 +71,7 @@ class SimulationCameraDevice:
 
     @property
     def device_index(self) -> int | None:
-        return None
+        return self._device_index
 
     @property
     def device_model(self) -> str | None:
@@ -90,17 +96,6 @@ class SimulationCameraDevice:
         if settings.output_resolution != DEFAULT_OUTPUT_RESOLUTION:
             raise InvalidRequestError(
                 "The simulation camera supports 1280x720 output only",
-                details={
-                    "component": "camera",
-                    "operation": "validate settings",
-                },
-            )
-        if (
-            settings.sensor_resolution is not None
-            and settings.sensor_resolution != DEFAULT_OUTPUT_RESOLUTION
-        ):
-            raise InvalidRequestError(
-                "The simulation camera advertises sensor resolution 1280x720 only",
                 details={
                     "component": "camera",
                     "operation": "validate settings",

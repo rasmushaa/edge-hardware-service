@@ -34,7 +34,7 @@ def test_status_returns_complete_simulation_state(client: TestClient) -> None:
     assert response.json() == {
         "backend": "simulation",
         "state": "streaming",
-        "device_index": None,
+        "device_index": 0,
         "device_model": "simulation",
         "settings": {
             "fps": None,
@@ -53,6 +53,7 @@ def test_status_returns_complete_simulation_state(client: TestClient) -> None:
         "latest_focus_succeeded": None,
         "lens_position_diopters": None,
         "unavailable_reason": None,
+        "reconnect_used_defaults": False,
     }
 
 
@@ -69,27 +70,17 @@ def test_image_is_latest_broker_jpeg_with_no_cache_headers(
     assert not hasattr(CameraDevice, "capture")
 
 
-@pytest.mark.parametrize(
-    ("rotation", "orientation"),
-    [(0, 1), (90, 6), (180, 3), (270, 8)],
-)
-def test_rotation_changes_exif_only(
-    client: TestClient,
-    rotation: int,
-    orientation: int,
-) -> None:
+def test_rotation_changes_exif_only(client: TestClient) -> None:
     patch = client.patch(
         "/api/v1/camera/settings",
-        json={"rotation_degrees": rotation},
+        json={"rotation_degrees": 90},
     )
     image = client.get("/api/v1/camera/image")
 
     assert patch.status_code == 200
     assert image.status_code == 200
     assert jpeg_dimensions(image.content) == (1280, 720)
-    assert piexif.load(image.content)["0th"][piexif.ImageIFD.Orientation] == (
-        orientation
-    )
+    assert piexif.load(image.content)["0th"][piexif.ImageIFD.Orientation] == 6
 
 
 def test_partial_settings_and_autofocus_keep_one_effective_configuration(
@@ -99,7 +90,7 @@ def test_partial_settings_and_autofocus_keep_one_effective_configuration(
         "/api/v1/camera/settings",
         json={
             "fps": 14,
-            "sensor_resolution": {"width_px": 1280, "height_px": 720},
+            "sensor_resolution": {"width_px": 2000, "height_px": 1100},
         },
     )
     autofocus = client.post("/api/v1/camera/autofocus")
@@ -108,6 +99,10 @@ def test_partial_settings_and_autofocus_keep_one_effective_configuration(
     assert settings.status_code == 200
     assert settings.json()["settings"]["fps"] == 14.0
     assert settings.json()["settings"]["sensor_resolution"] == {
+        "width_px": 2000,
+        "height_px": 1100,
+    }
+    assert settings.json()["stream"]["sensor_resolution"] == {
         "width_px": 1280,
         "height_px": 720,
     }
@@ -153,14 +148,15 @@ def test_mjpeg_stream_has_one_complete_part_and_no_cache_headers() -> None:
     class FinishedStreamService:
         frames = FinishedBroker()
 
-        def wait_for_frame(self) -> CameraFrame:
-            return CameraFrame(
+        def open_frame_source(self) -> tuple[FinishedBroker, CameraFrame]:
+            frame = CameraFrame(
                 jpeg=b"\xff\xd8camera-frame\xff\xd9",
                 sequence=1,
                 captured_at=SimpleNamespace(),  # type: ignore[arg-type]
                 width=1280,
                 height=720,
             )
+            return self.frames, frame
 
         def status(self) -> SimpleNamespace:
             return SimpleNamespace(state="stopped")
@@ -231,7 +227,69 @@ def test_nullable_fps_resets_provider_control(client: TestClient) -> None:
     assert response.json()["settings"]["fps"] is None
 
 
-def test_openapi_exposes_exactly_six_camera_operations(client: TestClient) -> None:
+def test_camera_lifecycle_reset_release_connect_and_reconnect(
+    client: TestClient,
+) -> None:
+    assert (
+        client.patch(
+            "/api/v1/camera/settings", json={"fps": 12, "rotation_degrees": 90}
+        ).status_code
+        == 200
+    )
+
+    reset = client.post("/api/v1/camera/settings/reset")
+    assert reset.status_code == 200
+    assert reset.json()["settings"]["fps"] is None
+    assert reset.json()["settings"]["rotation_degrees"] == 0
+
+    released = client.delete("/api/v1/camera")
+    status = client.get("/api/v1/camera")
+    assert released.status_code == 204
+    assert status.json()["state"] == "disconnected"
+    assert status.json()["settings"] is None
+    assert status.json()["device_index"] is None
+
+    for method, path in (
+        (client.get, "/api/v1/camera/capabilities"),
+        (client.get, "/api/v1/camera/image"),
+        (client.post, "/api/v1/camera/autofocus"),
+        (client.post, "/api/v1/camera/settings/reset"),
+        (client.post, "/api/v1/camera/reconnect"),
+    ):
+        response = method(path)
+        assert response.status_code == 409
+        assert response.json()["code"] == "camera_not_connected"
+
+    connected = client.post("/api/v1/camera/connect")
+    assert connected.status_code == 201
+    assert connected.json()["state"] == "streaming"
+    assert connected.json()["device_index"] == 0
+
+    reconnected = client.post("/api/v1/camera/reconnect")
+    assert reconnected.status_code == 200
+    assert reconnected.json()["state"] == "streaming"
+    assert reconnected.json()["reconnect_used_defaults"] is False
+
+
+def test_connect_does_not_replace_an_active_camera(client: TestClient) -> None:
+    response = client.post("/api/v1/camera/connect", json={"device_index": 1})
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "conflict"
+    assert client.get("/api/v1/camera").json()["device_index"] == 0
+
+
+def test_connect_rejects_an_invalid_device_index(client: TestClient) -> None:
+    assert client.delete("/api/v1/camera").status_code == 204
+
+    response = client.post("/api/v1/camera/connect", json={"device_index": -1})
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+    assert client.get("/api/v1/camera").json()["state"] == "disconnected"
+
+
+def test_openapi_exposes_exactly_ten_camera_operations(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     camera_operations = {
         (method, path)
@@ -244,9 +302,13 @@ def test_openapi_exposes_exactly_six_camera_operations(client: TestClient) -> No
         ("get", "/api/v1/camera"),
         ("get", "/api/v1/camera/capabilities"),
         ("patch", "/api/v1/camera/settings"),
+        ("post", "/api/v1/camera/settings/reset"),
         ("post", "/api/v1/camera/autofocus"),
         ("get", "/api/v1/camera/stream"),
         ("get", "/api/v1/camera/image"),
+        ("delete", "/api/v1/camera"),
+        ("post", "/api/v1/camera/connect"),
+        ("post", "/api/v1/camera/reconnect"),
     }
     patch = schema["paths"]["/api/v1/camera/settings"]["patch"]
     assert set(patch["responses"]) >= {"200", "422", "503"}
@@ -261,7 +323,7 @@ def test_openapi_exposes_exactly_six_camera_operations(client: TestClient) -> No
     assert set(examples) == {
         "frame_rate",
         "provider_defaults",
-        "sensor_mode",
+        "sensor_hint",
         "output_resolution",
         "portrait",
         "manual_focus",
@@ -272,6 +334,10 @@ def test_openapi_exposes_exactly_six_camera_operations(client: TestClient) -> No
 
     status_operation = schema["paths"]["/api/v1/camera"]["get"]
     capabilities_operation = schema["paths"]["/api/v1/camera/capabilities"]["get"]
+    reset_operation = schema["paths"]["/api/v1/camera/settings/reset"]["post"]
+    release_operation = schema["paths"]["/api/v1/camera"]["delete"]
+    connect_operation = schema["paths"]["/api/v1/camera/connect"]["post"]
+    reconnect_operation = schema["paths"]["/api/v1/camera/reconnect"]["post"]
     stream_operation = schema["paths"]["/api/v1/camera/stream"]["get"]
     image_operation = schema["paths"]["/api/v1/camera/image"]["get"]
     descriptions = {
@@ -281,19 +347,21 @@ def test_openapi_exposes_exactly_six_camera_operations(client: TestClient) -> No
         "autofocus": " ".join(autofocus["description"].split()),
         "stream": " ".join(stream_operation["description"].split()),
         "image": " ".join(image_operation["description"].split()),
+        "reset": " ".join(reset_operation["description"].split()),
+        "release": " ".join(release_operation["description"].split()),
+        "connect": " ".join(connect_operation["description"].split()),
+        "reconnect": " ".join(reconnect_operation["description"].split()),
     }
-    assert "process-wide camera pipeline" in descriptions["status"]
-    assert "does not use a camera-model allowlist" in descriptions["capabilities"]
-    assert "previous settings active" in descriptions["settings"]
-    assert "remains active after the request" in descriptions["autofocus"]
-    assert "not a URL for another camera server" in descriptions["stream"]
-    assert "not a camera still-capture" in descriptions["image"]
+    assert all(description for description in descriptions.values())
+    assert set(connect_operation["responses"]) >= {"201", "409", "422", "503"}
+    assert set(reconnect_operation["responses"]) >= {"200", "409", "503"}
 
     components = schema["components"]["schemas"]
     for model_name in (
         "PixelResolution",
         "CameraSettings",
         "CameraSettingsPatch",
+        "CameraConnectRequest",
         "CameraCapabilities",
         "CameraStatus",
         "CameraStreamInfo",

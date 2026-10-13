@@ -179,6 +179,17 @@ def test_openapi_exposes_all_gpio_operations_and_named_examples(
             "schema"
         ] == {"$ref": "#/components/schemas/ErrorResponse"}
 
+    descriptions = {
+        "registry": schema["paths"]["/api/v1/gpio"]["get"]["description"],
+        "status": schema["paths"]["/api/v1/gpio/{pin}"]["get"]["description"],
+        "configure": configuration["description"],
+        "read": schema["paths"]["/api/v1/gpio/{pin}/value"]["get"]["description"],
+        "write": schema["paths"]["/api/v1/gpio/{pin}/value"]["put"]["description"],
+        "pwm": schema["paths"]["/api/v1/gpio/{pin}/pwm"]["put"]["description"],
+        "release": schema["paths"]["/api/v1/gpio/{pin}"]["delete"]["description"],
+    }
+    assert all(description.strip() for description in descriptions.values())
+
 
 def test_health_endpoint_uses_the_versioned_prefix(client: TestClient) -> None:
     """The basic health route should start with the same API version prefix."""

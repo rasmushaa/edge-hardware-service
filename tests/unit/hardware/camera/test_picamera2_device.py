@@ -57,26 +57,6 @@ class FakeCamera:
             "AfTrigger": (AfTriggerEnum.Start, AfTriggerEnum.Cancel, None),
             "LensPosition": (0.0, 32.0, 1.0),
         }
-        self._sensor_modes: list[dict[str, Any]] = [
-            {
-                "size": (1920, 1080),
-                "format": "RAW10",
-                "bit_depth": 10,
-                "fps": 60.0,
-            },
-            {
-                "size": (1920, 1080),
-                "format": "RAW12",
-                "bit_depth": 12,
-                "fps": 15.0,
-            },
-            {
-                "size": (4608, 2592),
-                "format": "RAW10",
-                "bit_depth": 10,
-                "fps": 14.0,
-            },
-        ]
         self.events: list[str] = []
         self.configurations: list[dict[str, Any]] = []
         self.controls: list[dict[str, Any]] = []
@@ -86,11 +66,12 @@ class FakeCamera:
         self.output: Any = None
         self.post_callback: Any = None
         self.adjust_output_to: tuple[int, int] | None = None
+        self.default_sensor_size = (1536, 864)
+        self.sensor_substitutions = {(2000, 1100): (2304, 1296)}
 
     @property
     def sensor_modes(self) -> list[dict[str, Any]]:
-        self.events.append("sensor_modes")
-        return self._sensor_modes
+        raise AssertionError("the adapter must not enumerate Picamera2 sensor modes")
 
     @property
     def camera_controls(self) -> dict[str, Any]:
@@ -109,7 +90,20 @@ class FakeCamera:
         self.configurations.append(configuration)
 
     def camera_configuration(self) -> dict[str, Any]:
-        return self.configurations[-1]
+        applied = {
+            key: dict(value) if isinstance(value, dict) else value
+            for key, value in self.configurations[-1].items()
+        }
+        requested = applied.get("sensor", {}).get("output_size")
+        sensor_size = self.sensor_substitutions.get(
+            requested,
+            requested or self.default_sensor_size,
+        )
+        applied["sensor"] = {
+            "output_size": requested or self.default_sensor_size,
+        }
+        applied["raw"] = {"size": sensor_size}
+        return applied
 
     def start_recording(self, encoder: Any, output: Any) -> None:
         del encoder
@@ -168,7 +162,7 @@ def settings(
     )
 
 
-def test_arbitrary_model_discovers_capabilities_before_default_stream(
+def test_arbitrary_model_reads_controls_without_enumerating_sensor_modes(
     fake_provider: FakeCamera,
 ) -> None:
     received: list[bytes] = []
@@ -177,17 +171,23 @@ def test_arbitrary_model_discovers_capabilities_before_default_stream(
     device.start(settings(), received.append)
 
     config = fake_provider.configurations[0]
-    assert fake_provider.events[:2] == ["sensor_modes", "camera_controls"]
+    assert fake_provider.events[0] == "camera_controls"
     assert config["main"] == {"size": (1280, 720), "format": "YUV420"}
     assert "sensor" not in config
     assert "controls" not in config
     assert device.device_model == "imx708_wide_noir"
+    assert device.capabilities.sensor_modes == ()
     assert device.capabilities.frame_rate_control is True
     assert device.capabilities.focus.modes == (
         "unmanaged",
         "manual",
         "auto",
         "continuous",
+    )
+    assert device.stream_info is not None
+    assert device.stream_info.sensor_resolution == PixelResolution(
+        width_px=1536,
+        height_px=864,
     )
     assert isinstance(fake_provider.output.output, BufferedIOBase)
     assert fake_provider.output.output.writable() is True
@@ -196,41 +196,48 @@ def test_arbitrary_model_discovers_capabilities_before_default_stream(
     device.close()
 
 
-def test_requested_resolution_uses_quality_first_mode_that_meets_fps(
+def test_adapter_accepts_a_selected_non_default_camera_index(
+    fake_provider: FakeCamera,
+) -> None:
+    device = Picamera2Device(device_index=2)
+
+    assert device.device_index == 2
+    assert device.capabilities.device_index == 2
+    device.close()
+
+
+def test_requested_sensor_resolution_is_a_hint_and_applied_mode_is_reported(
     fake_provider: FakeCamera,
 ) -> None:
     device = Picamera2Device()
-    device.start(settings(sensor=(1920, 1080), fps=10), lambda _: None)
-    assert fake_provider.configurations[-1]["sensor"] == {
-        "output_size": (1920, 1080),
-        "bit_depth": 12,
-    }
-    device.close()
+    device.start(settings(sensor=(2000, 1100), fps=30), lambda _: None)
 
-    second = Picamera2Device()
-    second.start(settings(sensor=(1920, 1080), fps=30), lambda _: None)
     assert fake_provider.configurations[-1]["sensor"] == {
-        "output_size": (1920, 1080),
-        "bit_depth": 10,
+        "output_size": (2000, 1100),
     }
-    second.close()
+    assert fake_provider.configurations[-1]["main"]["size"] == (1280, 720)
+    assert device.stream_info is not None
+    assert device.stream_info.sensor_resolution == PixelResolution(
+        width_px=2304,
+        height_px=1296,
+    )
+    device.close()
 
 
 def test_fixed_focus_and_non_raw_camera_starts_unmanaged(
     fake_provider: FakeCamera,
 ) -> None:
     fake_provider._camera_controls = {}
-    fake_provider._sensor_modes = [{"format": "YUYV"}]
     device = Picamera2Device()
 
     device.start(settings(), lambda _: None)
 
     assert device.capabilities.focus.modes == ("unmanaged",)
-    assert device.capabilities.sensor_modes[0].resolution is None
+    assert device.capabilities.sensor_modes == ()
     with pytest.raises(InvalidRequestError, match="focus mode"):
         device.validate_settings(settings(focus=ContinuousFocus(mode="continuous")))
-    with pytest.raises(InvalidRequestError, match="sensor resolution"):
-        device.validate_settings(settings(sensor=(640, 480)))
+    device.reconfigure(settings(sensor=(640, 480)))
+    assert fake_provider.configurations[-1]["sensor"] == {"output_size": (640, 480)}
     device.close()
 
 
@@ -354,24 +361,3 @@ def test_close_is_idempotent_and_closed_device_rejects_start(
     assert fake_provider.closed == 1
     with pytest.raises(HardwareUnavailableError, match="closed"):
         device.start(settings(), lambda _: None)
-
-
-def test_capability_discovery_failure_preserves_provider_reason(
-    fake_provider: FakeCamera,
-) -> None:
-    class BrokenModes:
-        def __iter__(self) -> object:
-            raise OSError(12, "Cannot allocate memory")
-
-    fake_provider._sensor_modes = BrokenModes()  # type: ignore[assignment]
-    device = Picamera2Device()
-
-    assert device.capabilities.sensor_modes == ()
-    assert device.capabilities.discovery_warnings == (
-        "sensor mode discovery failed; provider-managed streaming remains "
-        "available: OSError: [Errno 12] Cannot allocate memory",
-    )
-    assert fake_provider.closed == 1
-    device.start(settings(), lambda _: None)
-    assert "sensor" not in fake_provider.configurations[-1]
-    device.close()

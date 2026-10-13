@@ -11,6 +11,8 @@ CameraState = Literal[
     "starting",
     "streaming",
     "reconfiguring",
+    "reconnecting",
+    "disconnected",
     "unavailable",
     "stopped",
 ]
@@ -133,8 +135,9 @@ class CameraSettings(_ResponseModel):
     sensor_resolution: PixelResolution | None = Field(
         default=None,
         description=(
-            "Requested raw sensor mode. Null lets Picamera2 select a mode; a "
-            "non-null value must be advertised by camera capabilities."
+            "Preferred raw sensor dimensions. Picamera2/libcamera selects the "
+            "best available mode, which may differ from this hint. Null leaves "
+            "selection entirely to the provider."
         ),
     )
     output_resolution: PixelResolution = Field(
@@ -201,8 +204,9 @@ class CameraSettingsPatch(_RequestModel):
     sensor_resolution: PixelResolution | None = Field(
         default=None,
         description=(
-            "Advertised raw sensor resolution. Explicit null restores provider "
-            "selection; omission preserves the current value."
+            "Preferred raw sensor dimensions used as a best-match hint. Explicit "
+            "null restores provider selection; omission preserves the current "
+            "hint."
         ),
     )
     output_resolution: PixelResolution | None = Field(
@@ -260,6 +264,22 @@ class CameraSettingsPatch(_RequestModel):
                 "output_resolution, rotation_degrees, and focus may not be null"
             )
         return self
+
+
+class CameraConnectRequest(_RequestModel):
+    """Select the Picamera2 device index to connect."""
+
+    device_index: int = Field(
+        default=0,
+        strict=True,
+        ge=0,
+        description="Zero-based Picamera2 camera index. Defaults to 0.",
+        examples=[0, 1],
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"device_index": 0}, {"device_index": 1}]}
+    )
 
 
 class CameraTelemetry(_ResponseModel):
@@ -508,8 +528,7 @@ class CameraCapabilities(_ResponseModel):
     device_index: int | None = Field(
         default=None,
         description=(
-            "Provider camera index. The Raspberry Pi adapter currently supports "
-            "index 0; simulation has no physical index."
+            "Provider camera index selected when the active adapter was created."
         ),
         examples=[0],
     )
@@ -528,9 +547,10 @@ class CameraCapabilities(_ResponseModel):
     sensor_modes: tuple[SensorModeCapability, ...] = Field(
         default=(),
         description=(
-            "Raw modes discovered from Picamera2. The list may be empty when "
-            "mode enumeration was unavailable; null sensor_resolution still "
-            "allows provider selection."
+            "Raw modes known without invasive provider enumeration. The physical "
+            "adapter leaves this list empty because Picamera2 mode enumeration "
+            "temporarily configures every mode and can exhaust DMA memory. This "
+            "list is informational and is not an allowlist for sensor hints."
         ),
     )
     output: OutputCapability = Field(
@@ -560,14 +580,7 @@ class CameraCapabilities(_ResponseModel):
                     "device_index": 0,
                     "device_model": "imx708",
                     "discovery_warnings": [],
-                    "sensor_modes": [
-                        {
-                            "resolution": {"width_px": 2304, "height_px": 1296},
-                            "format": "SRGGB10_CSI2P",
-                            "bit_depth": 10,
-                            "max_fps": 56.0,
-                        }
-                    ],
+                    "sensor_modes": [],
                     "output": {
                         "default_resolution": {
                             "width_px": 1280,
@@ -646,13 +659,23 @@ class CameraStatus(_ResponseModel):
     state: CameraState = Field(
         description=(
             "Pipeline lifecycle state: starting, streaming, reconfiguring, "
-            "unavailable, or stopped."
+            "reconnecting, disconnected, unavailable, or stopped."
         ),
-        examples=["starting", "streaming", "reconfiguring", "unavailable"],
+        examples=[
+            "starting",
+            "streaming",
+            "reconfiguring",
+            "reconnecting",
+            "disconnected",
+            "unavailable",
+        ],
     )
     device_index: int | None = Field(
         default=None,
-        description="Provider camera index, or null for simulation/unavailable state.",
+        description=(
+            "Selected provider camera index, or null after intentional release "
+            "or service shutdown."
+        ),
         examples=[0],
     )
     device_model: str | None = Field(
@@ -662,8 +685,8 @@ class CameraStatus(_ResponseModel):
     )
     settings: CameraSettings | None = Field(
         description=(
-            "Last complete configuration accepted by the service, or null when "
-            "the camera is unavailable."
+            "Desired complete configuration. Null only after intentional release "
+            "or service shutdown; an unavailable camera retains it for retry."
         )
     )
     stream: CameraStreamInfo | None = Field(
@@ -700,6 +723,13 @@ class CameraStatus(_ResponseModel):
         ),
         examples=["Picamera2/libcamera is unavailable"],
     )
+    reconnect_used_defaults: bool = Field(
+        default=False,
+        description=(
+            "True when reconnect rejected the saved settings and successfully "
+            "retried with service defaults."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -707,7 +737,7 @@ class CameraStatus(_ResponseModel):
                 {
                     "backend": "simulation",
                     "state": "streaming",
-                    "device_index": None,
+                    "device_index": 0,
                     "device_model": "simulation",
                     "settings": {
                         "fps": None,
@@ -735,19 +765,30 @@ class CameraStatus(_ResponseModel):
                     "latest_focus_succeeded": None,
                     "lens_position_diopters": None,
                     "unavailable_reason": None,
+                    "reconnect_used_defaults": False,
                 },
                 {
                     "backend": "rpi",
                     "state": "unavailable",
-                    "device_index": None,
+                    "device_index": 0,
                     "device_model": None,
-                    "settings": None,
+                    "settings": {
+                        "fps": None,
+                        "sensor_resolution": None,
+                        "output_resolution": {
+                            "width_px": 1280,
+                            "height_px": 720,
+                        },
+                        "rotation_degrees": 0,
+                        "focus": {"mode": "unmanaged"},
+                    },
                     "stream": None,
                     "sensor_temperature_c": None,
-                    "focus_state": "unavailable",
+                    "focus_state": None,
                     "latest_focus_succeeded": None,
                     "lens_position_diopters": None,
                     "unavailable_reason": "Picamera2/libcamera is unavailable",
+                    "reconnect_used_defaults": False,
                 },
             ]
         }

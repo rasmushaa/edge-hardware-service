@@ -50,7 +50,7 @@ def load_hardware_pins(environment: Mapping[str, str]) -> HardwarePins:
         raw_value = environment.get(variable, "").strip()
         if not raw_value:
             raise ValueError(
-                f"{variable} is required; run `make pi-hardware-test` and "
+                f"{variable} is required; run `make hw-test` and "
                 f"select a safe BCM {role} pin"
             )
         if not raw_value.isascii() or not raw_value.isdecimal():

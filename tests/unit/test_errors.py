@@ -13,6 +13,7 @@ from edge_hardware_service.api.errors import (
 )
 from edge_hardware_service.errors import (
     AppError,
+    CameraNotConnectedError,
     ConflictError,
     HardwareUnavailableError,
     InvalidRequestError,
@@ -26,6 +27,7 @@ from edge_hardware_service.errors import (
     [
         (NotFoundError, "not_found", 404),
         (ConflictError, "conflict", 409),
+        (CameraNotConnectedError, "camera_not_connected", 409),
         (InvalidRequestError, "invalid_request", 422),
         (HardwareUnavailableError, "hardware_unavailable", 503),
         (OperationTimeoutError, "operation_timeout", 504),
@@ -54,6 +56,7 @@ def test_status_mapping_is_exhaustive_and_absent_details_are_omitted() -> None:
     assert APP_ERROR_STATUS_CODES == {
         "not_found": 404,
         "conflict": 409,
+        "camera_not_connected": 409,
         "invalid_request": 422,
         "hardware_unavailable": 503,
         "operation_timeout": 504,

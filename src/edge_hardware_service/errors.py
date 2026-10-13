@@ -7,6 +7,7 @@ from pydantic import JsonValue
 ErrorCode: TypeAlias = Literal[
     "not_found",
     "conflict",
+    "camera_not_connected",
     "invalid_request",
     "hardware_unavailable",
     "operation_timeout",
@@ -50,6 +51,12 @@ class ConflictError(AppError):
     """The request conflicts with the current application state."""
 
     code = "conflict"
+
+
+class CameraNotConnectedError(AppError):
+    """A camera operation requires an intentionally disconnected camera."""
+
+    code = "camera_not_connected"
 
 
 class InvalidRequestError(AppError):

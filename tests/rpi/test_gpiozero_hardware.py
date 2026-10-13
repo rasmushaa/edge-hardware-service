@@ -1,7 +1,7 @@
 """Functional GPIO library tests for unconnected Raspberry Pi pins.
 
 Run these tests natively on prepared Raspberry Pi OS through
-`make pi-hardware-test`. The suite requires three distinct, unconnected BCM
+`make hw-test`. The suite requires three distinct, unconnected BCM
 pins and no external components or wiring. It verifies:
 
 * Input reads using the Raspberry Pi's internal pull-up and pull-down.

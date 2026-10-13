@@ -22,9 +22,11 @@ help:
 		'Testing on Raspberry Pi 5 Bookworm hardware:' \
 		'  make hw-test            Sync this checkout to the Pi, recreate the remote' \
 		'                          .venv, then run native GPIO and camera hardware tests.' \
-		'                          Prompts for SSH host, three safe BCM pins, and camera.' \
+		'                          WARNING: stops all running containers on the target Pi.' \
+		'                          Prompts for SSH host, safe pins, camera, and confirmation.' \
 		'  make hw-test-docker     Build and transfer the ARM64 container-hw-test image,' \
 		'                          then run both GPIO and camera hardware tests in it.' \
+		'                          WARNING: stops all running containers on the target Pi.' \
 		'                          Prompts for the same host, pins, and confirmation.' \
 		'' \
 		'Production-shaped development container:' \
@@ -33,7 +35,8 @@ help:
 		'                          port 8000, and run attached until Ctrl+C.' \
 		'                          This does not run tests or access physical hardware.' \
 		'  make deploy             Prompt for a Pi SSH host, transfer that runtime image,' \
-		'                          replace the deployed container, and check /api/v1/health.' \
+		'                          stop all Pi containers, start the service, and check health.' \
+		'                          WARNING: every running target container will be stopped.' \
 		'                          This does not exercise GPIO or camera API operations.' \
 		'' \
 		'Opening release pull requests from main:' \
@@ -98,6 +101,7 @@ smoke-test:
 
 hw-test:
 	@printf '%s\n' \
+		'WARNING: this stops every running Docker container on the selected Pi.' \
 		'Syncing the repository, recreating the remote .venv, and then running' \
 		'native GPIO and camera tests on Raspberry Pi hardware.' \
 		'The command will explain requirements and ask for every input.'
@@ -105,6 +109,7 @@ hw-test:
 
 hw-test-docker:
 	@printf '%s\n' \
+		'WARNING: this stops every running Docker container on the selected Pi.' \
 		'Building and running the combined GPIO and camera hardware test image.' \
 		'The command will explain requirements and ask for every input.'
 	docker buildx build \
@@ -146,8 +151,9 @@ build:
 
 deploy:
 	@printf '%s\n' \
+		'WARNING: this stops every running Docker container on the selected Pi.' \
 		'Deploying edge-hardware-service:dev, built from the runtime target.' \
-		'This replaces the named Pi container and verifies /api/v1/health only.'
+		'This starts the service container and verifies /api/v1/health only.'
 	@./scripts/deploy-pi-manual.sh
 
 rc:

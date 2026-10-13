@@ -10,6 +10,8 @@ from edge_hardware_service.models.camera import (
     CameraTelemetry,
 )
 
+CameraDeviceFactory = Callable[[int], "CameraDevice"]
+
 
 class CameraDevice(Protocol):
     """One continuously running JPEG camera pipeline."""
