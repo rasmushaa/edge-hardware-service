@@ -35,18 +35,9 @@ testable hardware service with one reason to change.
 
 ## Install and use
 
-The generated API reference is the main user documentation. The current `main`
-branch is published at <https://rasmushaa.github.io/edge-hardware-service/>.
-When running the service locally, the same operations, request examples,
-response schemas, and errors are available in Swagger at `/docs`.
-
-The API is organized into three areas:
-
-- Health checks for service readiness.
-- Camera state, capabilities, settings, lifecycle, autofocus, images, and MJPEG.
-- GPIO inspection, configuration, digital I/O, PWM, and pin release.
-
-See the published API documentation for the complete endpoint reference.
+The generated API reference is the main user documentation.  
+The current `main` branch is API doocs are published at <https://rasmushaa.github.io/edge-hardware-service/>.  
+When running the service locally the same docs are available in Swagger at `/docs`.
 
 ### Run from the Python repository
 
